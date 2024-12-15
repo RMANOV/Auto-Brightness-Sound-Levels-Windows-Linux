@@ -1,6 +1,7 @@
 # Auto-Brightness-Sound-Levels-Windows-Linux
 
 Developed an Innovative Cross-Platform Display and Audio Management System
+
 Led the development of a sophisticated adaptive system that revolutionizes device display and audio management through intelligent environmental sensing and real-time adjustments.
 🔹 Technical Achievements:
 
