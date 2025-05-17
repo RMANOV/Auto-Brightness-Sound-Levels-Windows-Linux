@@ -9,7 +9,7 @@ import sounddevice as sd
 import re
 
 
-class BrightnessController:
+class AdaptiveBrightnessVolumeController:
     def __init__(self, camera_index=0, frame_queue_size=50, brightness_queue_size=50,
                  frame_interval=0.1, update_interval=1, inactivity_threshold=300):
         self.camera_index = camera_index
@@ -30,14 +30,14 @@ class BrightnessController:
         self.prev_camera_brightness = None
         self.brightness_change_threshold = 10
         self.brightness_smoothing_factor = 0.5
-        self.min_brightness = 10
-        self.max_brightness = 95
+        self.min_brightness = 5  # Setting min brightness to 5% as per requirements
+        self.max_brightness = 45  # Setting max brightness to 45% as per requirements
 
         # Audio settings
         self.audio_duration = 0.1  # seconds
         self.audio_samplerate = 44100  # Hz
-        self.min_volume = 2
-        self.max_volume = 60
+        self.min_volume = 3  # Setting min volume to 3% as per requirements
+        self.max_volume = 35  # Setting max volume to 35% as per requirements
         self.prev_volume = self.get_volume()
         self.smoothed_volume = self.prev_volume
         self.volume_smoothing_factor = 0.95
@@ -157,10 +157,15 @@ class BrightnessController:
 
                     self.prev_camera_brightness = camera_brightness
 
+                    # Enhance camera brightness to be slightly higher than direct correlation
+                    # For example, camera_brightness of 45% should yield around 30% instead of 22-23%
+                    enhanced_brightness = camera_brightness**0.8 * 1.3
+                    enhanced_brightness = min(enhanced_brightness, self.max_brightness)
+                    
                     brightness_diff = abs(
-                        camera_brightness - self.smoothed_brightness)
+                        enhanced_brightness - self.smoothed_brightness)
                     if brightness_diff > self.brightness_change_threshold:
-                        setpoint = camera_brightness
+                        setpoint = enhanced_brightness
                     else:
                         setpoint = self.smoothed_brightness
 
@@ -183,12 +188,14 @@ class BrightnessController:
                     audio = self.capture_audio()
                     noise_level = self.compute_noise_level(audio)
 
-                    # Map noise level to volume percentage
+                    # Map noise level to volume percentage with enhancement
                     normalized_noise_level = (
                         noise_level - self.min_noise_level) / (self.max_noise_level - self.min_noise_level)
                     normalized_noise_level = max(
                         0.0, min(1.0, normalized_noise_level))
-                    volume = normalized_noise_level * 100
+                    # Enhance volume to be slightly higher than direct correlation
+                    # Using a power function with exponent < 1 to boost lower values more
+                    volume = normalized_noise_level**0.8 * 100
 
                     # Smooth the volume changes
                     error_volume = volume - self.smoothed_volume
@@ -214,5 +221,5 @@ class BrightnessController:
 
 
 if __name__ == '__main__':
-    controller = BrightnessController()
+    controller = AdaptiveBrightnessVolumeController()
     controller.adjust_screen_brightness()
