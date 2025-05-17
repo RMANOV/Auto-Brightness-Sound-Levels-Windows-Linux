@@ -748,33 +748,56 @@ class AdaptiveBrightnessVolumeController:
                         if self.current_warmup_frame % 10 == 0 or current_time - self.last_significant_change_time < 5:
                             print(f"Camera brightness: {camera_brightness:.1f}")
                             
-                        # Improved formula with better curve for dark/bright room
-                        # Camera brightness: high (80-100) = bright room = higher screen brightness
-                        # Camera brightness: low (0-30) = dark room = lower screen brightness
-                        # This creates an inverted response (when room gets darker, screen gets dimmer)
-                        inverted_brightness = max(0, 100 - camera_brightness)  
+                        # DEFINITIVE RULE: 
+                        # ✓ Dark room + dark content = lowest brightness (5%)
+                        # ✓ Bright room + bright content = highest brightness (45%)
+                        #
+                        # Direct mapping (NOT inverted anymore):
+                        # Camera brightness 0-30: very dark room = low screen brightness (5-15%)
+                        # Camera brightness 30-70: medium room = medium brightness (15-35%)
+                        # Camera brightness 70-100: bright room = high brightness (35-45%)
                         
-                        # Apply higher sensitivity for faster reaction to changes
-                        sensitivity_boost = 1.0
-                        # Longer response window (10 seconds) for changes in brightness
-                        if current_time - self.last_significant_change_time < 10:  
-                            sensitivity_boost = self.sensitivity_to_changes
-                            # If it's a light-to-dark transition, move more quickly
-                            if camera_brightness < 40:  # We're in a darker room
-                                # Target the lower end of the brightness range more aggressively
-                                # CRITICAL FIX: In dark rooms, we need LOWER brightness
-                                dark_room_value = max(5, min(15, camera_brightness * 0.5))
-                                target_brightness = dark_room_value  # Directly use low values for dark rooms
-                                print(f"🌙 Dark room mode - target brightness: {target_brightness:.1f}% (raw: {dark_room_value:.1f})")
-                                # DO NOT return here - that was causing the function to exit completely!
+                        # We apply DIRECT mapping for more intuitive behavior
+                        # Higher camera brightness = higher screen brightness  
                         
-                        # Only use standard formula if we're NOT in dark room mode
-                        if camera_brightness >= 40 or current_time - self.last_significant_change_time >= 10:
-                            # Standard formula for normal conditions
-                            # This maps camera brightness 0-100 to screen brightness 5-45%
-                            # IMPORTANT: Reduce the multiplier to avoid always maxing out
-                            target_brightness = 5 + (inverted_brightness * 0.25 * sensitivity_boost)
-                            print(f"☀️ Normal mode - target: {target_brightness:.1f}% (inverted: {inverted_brightness:.1f}, boost: {sensitivity_boost:.1f}x)")
+                        # INCREASED reaction speed by 50% as requested
+                        # 1.5 = original rate + 50% increase
+                        base_adjustment_speed = 1.5
+                        
+                        # Check for significant light changes to react even faster
+                        time_since_change = current_time - self.last_significant_change_time
+                        if time_since_change < 5:  # Recent significant change (last 5 seconds)
+                            # Boost speed by 2x during transitions (3x normal speed)
+                            adjustment_boost = 2.0 * base_adjustment_speed
+                            print(f"⚡ Fast adjustment mode - boosted speed: {adjustment_boost:.1f}x normal")
+                        else:
+                            # Normal 50% faster speed
+                            adjustment_boost = base_adjustment_speed
+                        
+                        # DIRECT CALCULATION BASED ON CAMERA BRIGHTNESS
+                        # Using simple linear mapping: 
+                        # 0 camera brightness → 5% screen brightness
+                        # 100 camera brightness → 45% screen brightness
+                        
+                        # Slope calculation for y = mx + b line:
+                        # m = (y2-y1)/(x2-x1) = (45-5)/(100-0) = 0.4
+                        # Direct linear formula: brightness = 5 + (camera_brightness * 0.4)
+                        
+                        # Calculate screen brightness directly from camera brightness
+                        if camera_brightness < 30:  # Dark room (0-30)
+                            # Dark room: 5-15% brightness (linear mapping 0→5%, 30→15%)
+                            target_brightness = 5 + (camera_brightness / 30 * 10)
+                            print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
+                            
+                        elif camera_brightness > 70:  # Bright room (70-100)
+                            # Bright room: 35-45% brightness (linear mapping 70→35%, 100→45%)
+                            target_brightness = 35 + ((camera_brightness - 70) / 30 * 10)
+                            print(f"☀️ Bright room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
+                            
+                        else:  # Medium room (30-70)
+                            # Medium brightness: 15-35% (linear mapping 30→15%, 70→35%)
+                            target_brightness = 15 + ((camera_brightness - 30) / 40 * 20)
+                            print(f"🌤️ Medium light - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
@@ -813,12 +836,18 @@ class AdaptiveBrightnessVolumeController:
                                 # Remember this as our baseline brightness after warmup
                                 self.prev_camera_brightness = camera_brightness
                         else:
-                            # Normal operation - check if change is significant enough
-                            brightness_diff = abs(target_brightness - self.smoothed_brightness)
-                            if brightness_diff > self.brightness_change_threshold:
-                                # Smooth the transition
-                                error = target_brightness - self.smoothed_brightness
-                                self.smoothed_brightness += error * self.brightness_smoothing_factor
+                            # Normal operation - ALWAYS apply changes, but smooth the transition
+                            error = target_brightness - self.smoothed_brightness
+                            
+                            # Apply the increased adjustment speed (50% faster + boost during changes)
+                            # Either base_adjustment_speed (1.5) or with additional boost during transitions
+                            smooth_factor = self.brightness_smoothing_factor * adjustment_boost
+                            self.smoothed_brightness += error * smooth_factor
+                            
+                            # Debug output if significant changes are happening
+                            if abs(error) > 2.0:
+                                print(f"Adjusting brightness: {self.smoothed_brightness:.1f}% → {target_brightness:.1f}% " +
+                                      f"(change rate: {smooth_factor:.2f}, step: {error * smooth_factor:.2f})")
                                 
                         # Apply limits to brightness
                         self.smoothed_brightness = max(
