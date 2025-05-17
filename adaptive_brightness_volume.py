@@ -499,6 +499,10 @@ class AdaptiveBrightnessVolumeController:
         # This helps with the problem where 18% reported is actually 5% in reality
         calibrated_brightness = max(5, round(brightness / self.brightness_calibration_factor))
         
+        # HARD ENFORCE the maximum limit regardless of calibration
+        # This ensures we NEVER exceed the user-specified maximum (45%)
+        calibrated_brightness = min(calibrated_brightness, self.max_brightness)
+        
         # Debug output to better understand the correction
         print(f"Brightness: Reported: {brightness}% → Setting: {calibrated_brightness}%")
         
