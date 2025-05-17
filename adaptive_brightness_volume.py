@@ -27,12 +27,40 @@ except (ImportError, OSError) as e:
     print(f"Warning: Audio features disabled - {e}")
     AUDIO_AVAILABLE = False
 
+# Try different screen capture methods
+SCREEN_CAPTURE_METHOD = ""
+SCREEN_CAPTURE_AVAILABLE = False
+
+# Try MSS first
 try:
     import mss  # type: ignore
+    SCREEN_CAPTURE_METHOD = "mss"
     SCREEN_CAPTURE_AVAILABLE = True
 except ImportError:
-    print("Warning: mss not found. Screen content analysis disabled.")
-    SCREEN_CAPTURE_AVAILABLE = False
+    print("Warning: mss not found. Trying alternative screen capture methods.")
+
+# Try Pillow/ImageGrab if MSS fails
+if not SCREEN_CAPTURE_AVAILABLE:
+    try:
+        from PIL import ImageGrab  # type: ignore
+        SCREEN_CAPTURE_METHOD = "pillow"
+        SCREEN_CAPTURE_AVAILABLE = True
+    except ImportError:
+        print("Warning: PIL.ImageGrab not found.")
+
+# Try GTK screenshot if others fail
+if not SCREEN_CAPTURE_AVAILABLE:
+    try:
+        import gi  # type: ignore
+        gi.require_version('Gdk', '3.0')
+        from gi.repository import Gdk  # type: ignore
+        SCREEN_CAPTURE_METHOD = "gtk"
+        SCREEN_CAPTURE_AVAILABLE = True
+    except (ImportError, ValueError):
+        print("Warning: GTK screenshot method not available.")
+
+if not SCREEN_CAPTURE_AVAILABLE:
+    print("Screen content analysis disabled - no working method found.")
 
 
 class AdaptiveBrightnessVolumeController:
@@ -83,14 +111,21 @@ class AdaptiveBrightnessVolumeController:
         self.brightness_change_threshold: float = 5.0
 
         # Screen content analysis
-        self.screen_check_interval: float = 1.0  # seconds
+        self.screen_check_interval: float = 2.0  # seconds (increased to reduce errors)
         self.last_screen_check_time: float = 0.0
         self.screen_brightness_factor: float = 1.0
+        self.screen_capture_error_count: int = 0
+        self.max_screen_errors: int = 5  # Show only first few errors
         
-        if SCREEN_CAPTURE_AVAILABLE:
-            self.sct = mss.mss()
-        else:
-            self.sct = None
+        # Initialize screen capture based on available method
+        self.sct = None
+        if SCREEN_CAPTURE_METHOD == "mss":
+            try:
+                self.sct = mss.mss()
+                print("Using MSS for screen content analysis")
+            except Exception as e:
+                print(f"Failed to initialize MSS: {e}")
+                SCREEN_CAPTURE_AVAILABLE = False
 
         # Audio settings
         self.audio_duration: float = 0.1  # seconds
@@ -180,19 +215,40 @@ class AdaptiveBrightnessVolumeController:
         return self.calculate_brightness(gray_frame)
 
     def analyze_screen_content(self) -> float:
-        if not SCREEN_CAPTURE_AVAILABLE or self.sct is None:
+        if not SCREEN_CAPTURE_AVAILABLE:
             return 1.0  # Neutral adjustment if screen capture not available
 
         try:
-            monitor = self.sct.monitors[1]  # Primary monitor
-            screenshot = self.sct.grab(monitor)
-            # Convert to numpy array and calculate brightness
-            img = np.array(screenshot)
+            # Capture screen based on available method
+            if SCREEN_CAPTURE_METHOD == "mss" and self.sct is not None:
+                try:
+                    monitor = self.sct.monitors[1]  # Primary monitor
+                    screenshot = self.sct.grab(monitor)
+                    img = np.array(screenshot)
+                except Exception as e:
+                    raise Exception(f"MSS capture failed: {e}")
+            elif SCREEN_CAPTURE_METHOD == "pillow":
+                try:
+                    screenshot = ImageGrab.grab()
+                    img = np.array(screenshot)
+                except Exception as e:
+                    raise Exception(f"PIL capture failed: {e}")
+            elif SCREEN_CAPTURE_METHOD == "gtk":
+                try:
+                    window = Gdk.get_default_root_window()
+                    x, y, width, height = window.get_geometry()
+                    pb = Gdk.pixbuf_get_from_window(window, x, y, width, height)
+                    img = np.array(pb.get_pixels_array())
+                except Exception as e:
+                    raise Exception(f"GTK capture failed: {e}")
+            else:
+                return 1.0  # No working method
+
+            # Calculate brightness
             brightness = np.mean(img) / 255
+            self.screen_capture_error_count = 0  # Reset error count on success
 
             # Adjust brightness factor based on screen content
-            # For bright screens (white documents) reduce brightness
-            # For dark screens (dark themes) increase brightness slightly
             if brightness > 0.7:  # Very bright content
                 return 0.8  # Reduce screen brightness
             elif brightness < 0.3:  # Dark content
@@ -200,7 +256,13 @@ class AdaptiveBrightnessVolumeController:
             else:
                 return 1.0  # Neutral adjustment
         except Exception as e:
-            print(f"Screen analysis error: {e}")
+            # Limit error messages to avoid spam
+            if self.screen_capture_error_count < self.max_screen_errors:
+                print(f"Screen analysis error: {e}")
+                self.screen_capture_error_count += 1
+            elif self.screen_capture_error_count == self.max_screen_errors:
+                print("Too many screen capture errors, suppressing further messages")
+                self.screen_capture_error_count += 1
             return 1.0
 
     def _detect_brightness_method(self) -> str:
@@ -489,10 +551,27 @@ class AdaptiveBrightnessVolumeController:
 
 
 if __name__ == '__main__':
+    # Check for audio dependencies if missing
+    if not AUDIO_AVAILABLE:
+        print("\nAudio features are disabled. To enable audio support, install PortAudio:")
+        print("  sudo dnf install portaudio-devel  # For Fedora")
+        print("  sudo apt install portaudio19-dev  # For Ubuntu/Debian")
+        print("  Then reinstall the Python package: pip install sounddevice --user")
+        print("\nContinuing without audio features...\n")
+    
+    # Check for PIL for screen capture
+    if not SCREEN_CAPTURE_AVAILABLE:
+        print("\nScreen content analysis is disabled. To enable, install one of:")
+        print("  pip install mss --user        # Preferred method")
+        print("  pip install pillow --user     # Alternative method")
+        print("\nContinuing without screen content analysis...\n")
+    
     try:
         controller = AdaptiveBrightnessVolumeController()
         print("Starting adaptive brightness and volume controller...")
         print("Detected brightness control method:", controller.brightness_method)
+        if SCREEN_CAPTURE_AVAILABLE:
+            print("Screen capture method:", SCREEN_CAPTURE_METHOD)
         print("Press Ctrl+C to stop")
         controller.run()
     except KeyboardInterrupt:
