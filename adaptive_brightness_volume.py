@@ -20,33 +20,81 @@ except ImportError:
     def njit(func):
         return func
 
+# Different audio detection methods for Linux
+AUDIO_AVAILABLE = False
+AUDIO_METHOD = ""
+
+# Try using sounddevice if available
 try:
     import sounddevice as sd  # type: ignore
     AUDIO_AVAILABLE = True
+    AUDIO_METHOD = "sounddevice"
 except (ImportError, OSError) as e:
-    print(f"Warning: Audio features disabled - {e}")
-    AUDIO_AVAILABLE = False
+    print(f"Warning: sounddevice not available - {e}")
+
+# If sounddevice failed, try using ALSA directly as a fallback
+if not AUDIO_AVAILABLE:
+    has_arecord = os.system("which arecord > /dev/null 2>&1") == 0
+    has_sox = os.system("which sox > /dev/null 2>&1") == 0
+    
+    if has_arecord:
+        AUDIO_AVAILABLE = True
+        AUDIO_METHOD = "arecord"
+        print("Using ALSA arecord for audio capturing")
+    elif has_sox:
+        AUDIO_AVAILABLE = True
+        AUDIO_METHOD = "sox"
+        print("Using SoX for audio capturing")
+        
+if not AUDIO_AVAILABLE:
+    print("Warning: Audio features disabled - no working capture method found")
 
 # Try different screen capture methods
 SCREEN_CAPTURE_METHOD = ""
 SCREEN_CAPTURE_AVAILABLE = False
 
-# Try MSS first
+# On Fedora, try Pillow first since it works better
 try:
-    import mss  # type: ignore
-    SCREEN_CAPTURE_METHOD = "mss"
-    SCREEN_CAPTURE_AVAILABLE = True
-except ImportError:
-    print("Warning: mss not found. Trying alternative screen capture methods.")
-
-# Try Pillow/ImageGrab if MSS fails
-if not SCREEN_CAPTURE_AVAILABLE:
+    from PIL import ImageGrab  # type: ignore
+    # Test if ImageGrab actually works (it might be present but not functional on some systems)
     try:
-        from PIL import ImageGrab  # type: ignore
+        test_grab = ImageGrab.grab(bbox=(0, 0, 10, 10))  # Small area to test
+        test_grab.size  # Access a property to verify it works
         SCREEN_CAPTURE_METHOD = "pillow"
         SCREEN_CAPTURE_AVAILABLE = True
+        print("Found PIL.ImageGrab for screen content analysis")
+    except Exception as e:
+        print(f"Warning: PIL.ImageGrab is installed but not functional: {e}")
+except ImportError:
+    print("Warning: PIL.ImageGrab not found. Trying alternative methods.")
+
+# Try MSS as backup option
+if not SCREEN_CAPTURE_AVAILABLE:
+    try:
+        import mss  # type: ignore
+        SCREEN_CAPTURE_METHOD = "mss"
+        SCREEN_CAPTURE_AVAILABLE = True
+        print("Found MSS for screen content analysis")
     except ImportError:
-        print("Warning: PIL.ImageGrab not found.")
+        print("Warning: MSS not found.")
+
+# Try xrandr/import method which works on most Linux systems
+if not SCREEN_CAPTURE_AVAILABLE:
+    import subprocess
+    import tempfile
+    import os
+    
+    # Check if we have the necessary tools
+    has_xrandr = os.system("which xrandr > /dev/null 2>&1") == 0
+    has_import = os.system("which import > /dev/null 2>&1") == 0
+    
+    if has_xrandr and has_import:
+        SCREEN_CAPTURE_METHOD = "xrandr-import"
+        SCREEN_CAPTURE_AVAILABLE = True
+        print("Found xrandr/import tools for screen content analysis")
+        
+        # Create a temp directory for screenshots if needed
+        os.makedirs(os.path.expanduser("~/.cache/adaptive-controller"), exist_ok=True)
 
 # Try GTK screenshot if others fail
 if not SCREEN_CAPTURE_AVAILABLE:
@@ -56,6 +104,7 @@ if not SCREEN_CAPTURE_AVAILABLE:
         from gi.repository import Gdk  # type: ignore
         SCREEN_CAPTURE_METHOD = "gtk"
         SCREEN_CAPTURE_AVAILABLE = True
+        print("Found GTK for screen content analysis")
     except (ImportError, ValueError):
         print("Warning: GTK screenshot method not available.")
 
@@ -119,6 +168,11 @@ class AdaptiveBrightnessVolumeController:
         
         # Initialize screen capture based on available method
         self.sct = None
+        self.pil_available = SCREEN_CAPTURE_METHOD == "pillow"
+        self.gtk_available = SCREEN_CAPTURE_METHOD == "gtk"
+        self.xrandr_available = SCREEN_CAPTURE_METHOD == "xrandr-import"
+        self.screenshot_path = os.path.expanduser("~/.cache/adaptive-controller/screenshot.png")
+        
         if SCREEN_CAPTURE_METHOD == "mss":
             try:
                 self.sct = mss.mss()
@@ -267,20 +321,66 @@ class AdaptiveBrightnessVolumeController:
 
         try:
             # Capture screen based on available method
-            if SCREEN_CAPTURE_METHOD == "mss" and self.sct is not None:
+            if self.pil_available:
                 try:
-                    monitor = self.sct.monitors[1]  # Primary monitor
-                    screenshot = self.sct.grab(monitor)
-                    img = np.array(screenshot)
-                except Exception as e:
-                    raise Exception(f"MSS capture failed: {e}")
-            elif SCREEN_CAPTURE_METHOD == "pillow":
-                try:
+                    # PIL is more reliable on most Linux systems
                     screenshot = ImageGrab.grab()
                     img = np.array(screenshot)
                 except Exception as e:
                     raise Exception(f"PIL capture failed: {e}")
-            elif SCREEN_CAPTURE_METHOD == "gtk":
+            elif self.xrandr_available:
+                try:
+                    # Use xrandr+import for reliable screen capture on X11 systems
+                    # First capture a small part of the screen to save resources
+                    # Get screen size first
+                    process = subprocess.run(
+                        ["xrandr", "--current"], 
+                        capture_output=True, 
+                        text=True, 
+                        check=True
+                    )
+                    output = process.stdout
+                    
+                    # Parse the primary display resolution
+                    lines = output.strip().split('\n')
+                    resolution = None
+                    for line in lines:
+                        if "*" in line and "+" in line:  # active mode with position
+                            parts = line.split()
+                            for part in parts:
+                                if "x" in part and part[0].isdigit():
+                                    resolution = part
+                                    break
+                            if resolution:
+                                break
+                                
+                    if not resolution:
+                        # Fallback to a reasonable resolution
+                        resolution = "1920x1080"
+                    
+                    width, height = map(int, resolution.split("x"))
+                    
+                    # Take a screenshot of center region (1/4 of screen)
+                    center_x = width // 4
+                    center_y = height // 4
+                    center_width = width // 2
+                    center_height = height // 2
+                    
+                    # Use imagemagick's import to capture screen
+                    cmd = f"import -window root -crop {center_width}x{center_height}+{center_x}+{center_y} {self.screenshot_path}"
+                    result = os.system(cmd)
+                    
+                    if result != 0:
+                        raise Exception("Failed to capture screenshot with import")
+                        
+                    # Read the screenshot
+                    img = cv2.imread(self.screenshot_path)
+                    if img is None:
+                        raise Exception("Failed to read captured screenshot")
+                        
+                except Exception as e:
+                    raise Exception(f"xrandr-import capture failed: {e}")
+            elif self.gtk_available:
                 try:
                     window = Gdk.get_default_root_window()
                     x, y, width, height = window.get_geometry()
@@ -288,6 +388,13 @@ class AdaptiveBrightnessVolumeController:
                     img = np.array(pb.get_pixels_array())
                 except Exception as e:
                     raise Exception(f"GTK capture failed: {e}")
+            elif SCREEN_CAPTURE_METHOD == "mss" and self.sct is not None:
+                try:
+                    monitor = self.sct.monitors[1]  # Primary monitor
+                    screenshot = self.sct.grab(monitor)
+                    img = np.array(screenshot)
+                except Exception as e:
+                    raise Exception(f"MSS capture failed: {e}")
             else:
                 return 1.0  # No working method
 
@@ -310,6 +417,13 @@ class AdaptiveBrightnessVolumeController:
             elif self.screen_capture_error_count == self.max_screen_errors:
                 print("Too many screen capture errors, suppressing further messages")
                 self.screen_capture_error_count += 1
+            
+            # After too many errors, try to disable the problematic method
+            if self.screen_capture_error_count > self.max_screen_errors + 10:
+                print(f"Warning: Disabling problematic screen capture method: {SCREEN_CAPTURE_METHOD}")
+                global SCREEN_CAPTURE_AVAILABLE
+                SCREEN_CAPTURE_AVAILABLE = False
+                
             return 1.0
 
     def _detect_brightness_method(self) -> str:
@@ -452,11 +566,53 @@ class AdaptiveBrightnessVolumeController:
             
         try:
             sample_count = int(self.audio_duration * self.audio_samplerate)
-            audio = sd.rec(sample_count,
-                           samplerate=self.audio_samplerate,
-                           channels=1,
-                           blocking=True)
-            return audio.flatten()
+            
+            if AUDIO_METHOD == "sounddevice":
+                # Use sounddevice
+                audio = sd.rec(sample_count,
+                               samplerate=self.audio_samplerate,
+                               channels=1,
+                               blocking=True)
+                return audio.flatten()
+                
+            elif AUDIO_METHOD == "arecord":
+                # Use ALSA arecord
+                audio_file = os.path.expanduser("~/.cache/adaptive-controller/audio.wav")
+                duration_ms = int(self.audio_duration * 1000)
+                cmd = f"arecord -q -d {self.audio_duration} -f S16_LE -r {self.audio_samplerate} -c1 {audio_file}"
+                result = os.system(cmd)
+                
+                if result != 0:
+                    raise Exception("Failed to record audio with arecord")
+                    
+                # Use OpenCV to read audio file
+                import wave
+                with wave.open(audio_file, 'rb') as wf:
+                    n_frames = wf.getnframes()
+                    audio_bytes = wf.readframes(n_frames)
+                    audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                    return audio
+                    
+            elif AUDIO_METHOD == "sox":
+                # Use SoX for recording
+                audio_file = os.path.expanduser("~/.cache/adaptive-controller/audio.wav")
+                cmd = f"sox -n -r {self.audio_samplerate} -c 1 {audio_file} trim 0 {self.audio_duration}"
+                result = os.system(cmd)
+                
+                if result != 0:
+                    raise Exception("Failed to record audio with sox")
+                    
+                # Read audio file
+                import wave
+                with wave.open(audio_file, 'rb') as wf:
+                    n_frames = wf.getnframes()
+                    audio_bytes = wf.readframes(n_frames)
+                    audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                    return audio
+            
+            # Fallback to empty array
+            return np.zeros(int(self.audio_duration * self.audio_samplerate))
+            
         except Exception as e:
             print(f"Audio capture error: {e}")
             return np.zeros(int(self.audio_duration * self.audio_samplerate))
@@ -624,16 +780,24 @@ class AdaptiveBrightnessVolumeController:
             self.stop_event.set()
             if self.cap:
                 self.cap.release()
-            cv2.destroyAllWindows()
+                
+            # Safely destroy OpenCV windows if possible
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                # OpenCV may not be compiled with GTK support
+                pass
 
 
 if __name__ == '__main__':
+    # Make sure cache directories exist
+    os.makedirs(os.path.expanduser("~/.cache/adaptive-controller"), exist_ok=True)
+
     # Check for audio dependencies if missing
     if not AUDIO_AVAILABLE:
-        print("\nAudio features are disabled. To enable audio support, install PortAudio:")
-        print("  sudo dnf install portaudio-devel  # For Fedora")
-        print("  sudo apt install portaudio19-dev  # For Ubuntu/Debian")
-        print("  Then reinstall the Python package: pip install sounddevice --user")
+        print("\nAudio features are disabled. To enable audio support:")
+        print("  For sounddevice: sudo dnf install portaudio-devel && pip install sounddevice --user")
+        print("  Alternative methods: sudo dnf install alsa-utils sox")
         print("\nContinuing without audio features...\n")
     
     # Check for PIL for screen capture
