@@ -711,27 +711,58 @@ class AdaptiveBrightnessVolumeController:
                         # INVERTED LOGIC: In dark room, we want lower brightness, in bright room - higher
                         # We want to respond more dramatically to environment changes
                         
-                        # Track last camera brightness to detect significant changes
+                        # Improved tracking of light changes with better detection
                         last_camera_brightness = self.prev_camera_brightness
                         if last_camera_brightness is not None:
-                            # If we detect a significant environmental change, mark the time
-                            if abs(camera_brightness - last_camera_brightness) > 15:  # Big change
+                            # Much more sensitive detection of changes (especially dimming)
+                            brightness_change = camera_brightness - last_camera_brightness
+                            abs_change = abs(brightness_change)
+                            
+                            # Lower threshold for dimming (going from bright to dark)
+                            dimming_threshold = 8  # Detect dimming changes faster
+                            brightening_threshold = 12  # For going from dark to bright
+                            
+                            # Use appropriate threshold based on direction of change
+                            if (brightness_change < 0 and abs_change > dimming_threshold) or \
+                               (brightness_change > 0 and abs_change > brightening_threshold):
                                 self.last_significant_change_time = current_time
-                                print(f"Significant light change detected: {last_camera_brightness} → {camera_brightness}")
+                                
+                                # Print detailed information about the light change
+                                direction = "DIMMING ⬇️" if brightness_change < 0 else "BRIGHTENING ⬆️"
+                                print(f"Light change detected - {direction}: {last_camera_brightness:.1f} → {camera_brightness:.1f} (Δ{brightness_change:.1f})")
+                                
+                                # For dimming, apply a boost to make it respond faster
+                                if brightness_change < 0:
+                                    self.sensitivity_to_changes = 2.5  # Higher boost for dimming
+                                else:
+                                    self.sensitivity_to_changes = 1.5  # Normal boost for brightening
                         
-                        # Adjust formula to be more reactive to room brightness
-                        # For dark rooms (camera_brightness < 30), keep screen dim (5-15%)
-                        # For bright rooms (camera_brightness > 70), make screen brighter (30-45%)
-                        inverted_brightness = max(0, 100 - camera_brightness)  # 100 gives better range
+                        # Enhanced formula that responds better to environment changes
+                        # Print current camera brightness for debugging
+                        if self.current_warmup_frame % 10 == 0 or current_time - self.last_significant_change_time < 5:
+                            print(f"Camera brightness: {camera_brightness:.1f}")
+                            
+                        # Improved formula with better curve for dark/bright room
+                        # Camera brightness: high (80-100) = bright room = higher screen brightness
+                        # Camera brightness: low (0-30) = dark room = lower screen brightness
+                        # This creates an inverted response (when room gets darker, screen gets dimmer)
+                        inverted_brightness = max(0, 100 - camera_brightness)  
                         
-                        # Apply higher sensitivity to make changes more noticeable
+                        # Apply higher sensitivity for faster reaction to changes
                         sensitivity_boost = 1.0
-                        if current_time - self.last_significant_change_time < 5:  # 5 seconds after big change
-                            sensitivity_boost = self.sensitivity_to_changes  # React more strongly to recent changes
+                        # Longer response window (10 seconds) for changes in brightness
+                        if current_time - self.last_significant_change_time < 10:  
+                            sensitivity_boost = self.sensitivity_to_changes
+                            # If it's a light-to-dark transition, move more quickly
+                            if camera_brightness < 40:  # We're in a darker room
+                                # Target the lower end of the brightness range more aggressively
+                                target_brightness = self.min_brightness + (camera_brightness * 0.3 * sensitivity_boost)
+                                print(f"Dark room mode - target brightness: {target_brightness:.1f}%")
+                                return  # Skip the normal formula below
                         
-                        # Fine-tune the range to ensure it stays within reasonable bounds
+                        # Standard formula for normal conditions
                         # This maps camera brightness 0-100 to screen brightness 5-45%
-                        target_brightness = 5 + (inverted_brightness * 0.4 * sensitivity_boost)  # Scale to fit our range
+                        target_brightness = 5 + (inverted_brightness * 0.4 * sensitivity_boost)
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
