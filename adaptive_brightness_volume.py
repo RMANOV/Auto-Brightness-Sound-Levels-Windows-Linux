@@ -784,30 +784,42 @@ class AdaptiveBrightnessVolumeController:
                         # Direct linear formula: brightness = 5 + (camera_brightness * 0.4)
                         
                         # Calculate screen brightness directly from camera brightness
-                        # Enhancement: Using power function to make values higher than direct correlation
-                        # For example: camera_brightness of 45% should yield around 30% instead of 22-23%
+                        # DIRECT MAPPING FOR CAMERA TO BRIGHTNESS
+                        # For camera 45% to yield screen brightness 30%:
                         
-                        # Apply enhancement formula with power function
-                        enhanced_camera_brightness = camera_brightness**0.8 * 1.3
-                        enhanced_camera_brightness = min(enhanced_camera_brightness, 100)
+                        # Let's use a different approach - apply a direct mapping formula 
+                        # instead of enhancing the value and then applying range formulas
                         
-                        if camera_brightness < 30:  # Dark room (0-30)
-                            # Dark room: enhanced 5-15% brightness
-                            # Original: 5 + (camera_brightness / 30 * 10)
-                            target_brightness = 5 + (enhanced_camera_brightness / 30 * 12)  # Boosted to 12% range
-                            print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
-                            
-                        elif camera_brightness > 70:  # Bright room (70-100)
-                            # Bright room: enhanced 35-45% brightness
-                            # Original: 35 + ((camera_brightness - 70) / 30 * 10)
-                            target_brightness = 35 + ((enhanced_camera_brightness - 70) / 30 * 10)
-                            print(f"☀️ Bright room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
-                            
-                        else:  # Medium room (30-70)
-                            # Medium brightness: enhanced 15-35% brightness
-                            # Original: 15 + ((camera_brightness - 30) / 40 * 20)
-                            target_brightness = 15 + ((enhanced_camera_brightness - 30) / 40 * 24)  # Boosted to 24% range
-                            print(f"🌤️ Medium light - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
+                        # This formula directly maps camera brightness to screen brightness:
+                        # Linear scaling: camera 0% → screen 5%, camera 100% → screen 45%
+                        # But with a boost in the middle range to ensure 45% camera → 30% screen
+                        
+                        # Base linear scaling formula
+                        base_linear = 5 + (camera_brightness * 0.4)  # Simple linear: 0→5%, 100→45%
+                        
+                        # Apply a curve to boost middle values
+                        # This applies extra boost to values around 45% camera brightness
+                        boost_factor = 1.0
+                        if 35 <= camera_brightness <= 55:
+                            # Maximum boost at 45%, tapering off at 35% and 55%
+                            distance_from_45 = abs(camera_brightness - 45)
+                            # Boost up to 35% (multiplicative factor from 1.0 to 1.35)
+                            max_boost = 1.35  # 35% boost at center point (45% camera)
+                            boost_factor = max_boost - (distance_from_45 / 10 * (max_boost - 1.0))
+                        
+                        # Apply the boost to get our target brightness
+                        target_brightness = base_linear * boost_factor
+                        
+                        # Ensure it stays within our min/max range
+                        target_brightness = max(self.min_brightness, min(self.max_brightness, target_brightness))
+                        
+                        # Print detailed information about the calculation
+                        if camera_brightness < 30:
+                            print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, boost: {boost_factor:.2f}x)")
+                        elif camera_brightness > 70:
+                            print(f"☀️ Bright room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, boost: {boost_factor:.2f}x)")
+                        else:
+                            print(f"🌤️ Medium light - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, boost: {boost_factor:.2f}x)")
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
