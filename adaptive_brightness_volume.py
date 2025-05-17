@@ -200,12 +200,18 @@ class AdaptiveBrightnessVolumeController:
         self.smoothed_volume: float = 40.0
         
         # Warmup parameters to avoid initial spike
-        self.warmup_frames: int = 20  # Increased from 10 to 20 for smoother startup
+        self.warmup_frames: int = 20  # For brightness
         self.current_warmup_frame: int = 0
-        self.warmup_cooldown: float = 0.05  # Much slower transitions (was 0.2)
+        self.warmup_cooldown: float = 0.05  # For brightness transitions (was 0.2)
         self.is_in_warmup: bool = True
         self.initial_brightness: Optional[float] = None
         self.initial_volume: Optional[float] = None
+        
+        # Separate audio warmup parameters (more extreme to prevent audio shock)
+        self.audio_warmup_frames: int = 40  # Double the frames for audio warmup
+        self.audio_warmup_cooldown: float = 0.005  # 10x slower transitions than brightness
+        self.is_audio_in_warmup: bool = True  # Separate flag for audio warmup
+        self.audio_warmup_threshold: int = 10  # Additional grace period after main warmup
         
         # Real brightness calibration - used to track actual screen vs reported values
         self.brightness_calibration_factor: float = 0.4  # Scale factor to match real values
@@ -825,22 +831,53 @@ class AdaptiveBrightnessVolumeController:
                         target_volume = adjusted_noise * volume_range + self.min_volume
 
                         # Handle warmup period for volume to avoid initial spikes
-                        if self.is_in_warmup:
-                            # Store initial values
+                        # Audio has its own separate (and longer) warmup period
+                        if self.is_audio_in_warmup:
+                            # Store initial values - we want to EXACTLY maintain
+                            # the initial volume for several seconds
                             if self.initial_volume is None:
-                                self.initial_volume = self.smoothed_volume
-                                print(f"Initial volume: {self.initial_volume}%")
+                                try:
+                                    # Get the actual current system volume
+                                    current_system_volume = float(self.get_volume())
+                                    self.initial_volume = current_system_volume
+                                    self.smoothed_volume = current_system_volume
+                                    print(f"Initial volume locked at: {self.initial_volume}%")
+                                except:
+                                    self.initial_volume = self.smoothed_volume
+                                    print(f"Using default initial volume: {self.initial_volume}%")
                             
-                            # Use much higher smoothing factor during warmup to avoid jumps
-                            if self.current_warmup_frame <= self.warmup_frames:
-                                # Apply very small incremental changes during calibration
+                            # First phase: Stay at EXACTLY current volume for 'audio_warmup_threshold' frames
+                            if self.current_warmup_frame <= self.audio_warmup_threshold:
+                                # Ignore all target volumes and keep exactly where we are
+                                self.smoothed_volume = self.initial_volume
+                                volume_change = 0  # No change at all
+                            # Second phase: Very gradual transition over extended period
+                            elif self.current_warmup_frame <= self.audio_warmup_frames:
+                                if self.current_warmup_frame % 8 == 0:  # Less frequent updates
+                                    audio_progress = ((self.current_warmup_frame - self.audio_warmup_threshold) * 100) // (self.audio_warmup_frames - self.audio_warmup_threshold)
+                                    print(f"Audio calibrating... {audio_progress}%")
+                                
+                                # Ultra-smooth transition - 100x slower than normal
                                 volume_error = target_volume - self.smoothed_volume
-                                self.smoothed_volume += volume_error * (self.volume_smoothing_factor * self.warmup_cooldown)
-                            # Warmup ending is handled in brightness section
+                                volume_change = volume_error * (self.volume_smoothing_factor * self.audio_warmup_cooldown)
+                                self.smoothed_volume += volume_change
+                            else:
+                                # End of audio warmup
+                                self.is_audio_in_warmup = False
+                                print("Audio calibration complete")
+                                # Apply normal adjustment, but still gentler than standard
+                                volume_error = target_volume - self.smoothed_volume
+                                volume_change = volume_error * (self.volume_smoothing_factor * 0.5)  # 50% normal speed
+                                self.smoothed_volume += volume_change
                         else:
                             # Normal volume adjustment after warmup
                             volume_error = target_volume - self.smoothed_volume
-                            self.smoothed_volume += volume_error * self.volume_smoothing_factor
+                            volume_change = volume_error * self.volume_smoothing_factor
+                            self.smoothed_volume += volume_change
+                            
+                        # Debug info about volume changes
+                        if abs(volume_change) > 0.1:
+                            print(f"Volume: {self.smoothed_volume:.1f}% (change: {volume_change:.2f})")
 
                         # Apply volume limits
                         min_vol = float(self.min_volume)
