@@ -717,25 +717,24 @@ class AdaptiveBrightnessVolumeController:
                             # This makes quieter sounds result in lower volumes and 
                             # prevents loud sounds from being too loud
                             
-                            # Higher curve_factor makes the curve steeper, giving higher volumes in quiet rooms
-                            curve_factor = 0.65  # Increased from 0.4 for higher volume in quiet environments
+                            # More gentle curve factor for balanced volume in quiet rooms
+                            curve_factor = 0.45  # Reduced to get a more gentle curve
                             
-                            # Higher multiplier increases the response to low noise levels
-                            multiplier = 15  # Increased from 9 for better response to quiet environments
+                            # Adjusted multiplier for better response at low noise levels
+                            multiplier = 10  # Reduced for less aggressive response
                             
-                            # Bias factor to push the minimal volume higher (closer to 20%)
-                            # The log10 function gives values between 0 and ~1, so adding a bias helps
-                            # ensure that even very quiet environments get a reasonable volume
-                            bias = 0.25  # Adds a minimum level even at very low noise
+                            # Smaller bias factor for a more subtle push to the base volume
+                            # The goal is to get around 20% volume in quiet rooms
+                            bias = 0.15  # Reduced bias for lower overall volume
                             
-                            # Calculate adjusted noise level with enhanced curve
+                            # Calculate adjusted noise level with balanced curve
                             adjusted_noise = curve_factor * np.log10(1 + multiplier * normalized_noise) + bias
                             
                             # Ensure the adjusted value stays between 0-1
                             adjusted_noise = max(0.0, min(1.0, adjusted_noise))
                         else:
-                            # Even at zero noise, we want a minimal level of adjustment
-                            adjusted_noise = 0.25  # This gives a base level (about 20% of range)
+                            # Base level adjustment for complete silence
+                            adjusted_noise = 0.15  # Reduced to give approximately 20% volume
                             
                         volume_range = self.max_volume - self.min_volume
                         target_volume = adjusted_noise * volume_range + self.min_volume
