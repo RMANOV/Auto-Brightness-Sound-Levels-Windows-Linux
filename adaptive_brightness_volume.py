@@ -198,6 +198,14 @@ class AdaptiveBrightnessVolumeController:
         self.prev_camera_brightness: Optional[float] = None
         self.current_volume: float = 40.0
         self.smoothed_volume: float = 40.0
+        
+        # Warmup parameters to avoid initial spike
+        self.warmup_frames: int = 10  # Number of frames to ignore at startup
+        self.current_warmup_frame: int = 0
+        self.warmup_cooldown: float = 0.2  # Extra smoothing during warmup period
+        self.is_in_warmup: bool = True
+        self.initial_brightness: Optional[float] = None
+        self.initial_volume: Optional[float] = None
 
     def setup_camera(self):
         """Initialize camera with fallback to other available cameras"""
@@ -681,24 +689,49 @@ class AdaptiveBrightnessVolumeController:
                         else:
                             target_brightness = camera_brightness
 
-                        # Check if change is significant enough
-                        brightness_diff = abs(target_brightness - self.smoothed_brightness)
-                        if brightness_diff > self.brightness_change_threshold:
-                            # Smooth the transition
-                            error = target_brightness - self.smoothed_brightness
-                            self.smoothed_brightness += error * self.brightness_smoothing_factor
-                            self.smoothed_brightness = max(
-                                float(self.min_brightness),
-                                min(float(self.max_brightness),
-                                    self.smoothed_brightness))
+                        # Handle warmup period to avoid initial spikes
+                        if self.is_in_warmup:
+                            # During the first few frames, just collect data without applying large changes
+                            self.current_warmup_frame += 1
+                            
+                            # Store initial values
+                            if self.initial_brightness is None:
+                                self.initial_brightness = self.smoothed_brightness
+                                print(f"Initial brightness: {self.initial_brightness}%")
+                                
+                            # Show progress during warmup
+                            if self.current_warmup_frame <= self.warmup_frames:
+                                if self.current_warmup_frame % 2 == 0:
+                                    print(f"Calibrating... {(self.current_warmup_frame * 100) // self.warmup_frames}%")
+                                
+                                # Use much higher smoothing factor during warmup to avoid jumps
+                                error = target_brightness - self.smoothed_brightness
+                                self.smoothed_brightness += error * (self.brightness_smoothing_factor * self.warmup_cooldown)
+                            else:
+                                # End of warmup period
+                                self.is_in_warmup = False
+                                print("Calibration complete, applying normal brightness control")
+                        else:
+                            # Normal operation - check if change is significant enough
+                            brightness_diff = abs(target_brightness - self.smoothed_brightness)
+                            if brightness_diff > self.brightness_change_threshold:
+                                # Smooth the transition
+                                error = target_brightness - self.smoothed_brightness
+                                self.smoothed_brightness += error * self.brightness_smoothing_factor
+                                
+                        # Apply limits to brightness
+                        self.smoothed_brightness = max(
+                            float(self.min_brightness),
+                            min(float(self.max_brightness),
+                                self.smoothed_brightness))
 
-                            # Apply the new brightness
-                            try:
-                                self.set_brightness(round(self.smoothed_brightness))
-                                self.current_brightness = self.smoothed_brightness
-                                last_brightness_change_time = current_time
-                            except Exception as e:
-                                print(f"Brightness setting error: {e}")
+                        # Apply the new brightness (always, but with different smoothing rates)
+                        try:
+                            self.set_brightness(round(self.smoothed_brightness))
+                            self.current_brightness = self.smoothed_brightness
+                            last_brightness_change_time = current_time
+                        except Exception as e:
+                            print(f"Brightness setting error: {e}")
 
                     # Audio processing and volume adjustment
                     if AUDIO_AVAILABLE:
@@ -739,9 +772,25 @@ class AdaptiveBrightnessVolumeController:
                         volume_range = self.max_volume - self.min_volume
                         target_volume = adjusted_noise * volume_range + self.min_volume
 
-                        # Smooth volume changes
-                        volume_error = target_volume - self.smoothed_volume
-                        self.smoothed_volume += volume_error * self.volume_smoothing_factor
+                        # Handle warmup period for volume to avoid initial spikes
+                        if self.is_in_warmup:
+                            # Store initial values
+                            if self.initial_volume is None:
+                                self.initial_volume = self.smoothed_volume
+                                print(f"Initial volume: {self.initial_volume}%")
+                            
+                            # Use much higher smoothing factor during warmup to avoid jumps
+                            if self.current_warmup_frame <= self.warmup_frames:
+                                # Apply very small incremental changes during calibration
+                                volume_error = target_volume - self.smoothed_volume
+                                self.smoothed_volume += volume_error * (self.volume_smoothing_factor * self.warmup_cooldown)
+                            # Warmup ending is handled in brightness section
+                        else:
+                            # Normal volume adjustment after warmup
+                            volume_error = target_volume - self.smoothed_volume
+                            self.smoothed_volume += volume_error * self.volume_smoothing_factor
+
+                        # Apply volume limits
                         min_vol = float(self.min_volume)
                         max_vol = float(self.max_volume)
                         self.smoothed_volume = max(min_vol, min(max_vol, self.smoothed_volume))
