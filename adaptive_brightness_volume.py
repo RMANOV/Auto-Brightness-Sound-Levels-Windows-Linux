@@ -498,19 +498,25 @@ class AdaptiveBrightnessVolumeController:
 
     def set_brightness(self, brightness: float) -> None:
         """Set screen brightness as percentage"""
-        # Apply limits
+        # Apply limits to input value
         brightness = max(self.min_brightness, min(self.max_brightness, brightness))
         
-        # Apply calibration factor to correct the actual vs reported brightness
-        # This helps with the problem where 18% reported is actually 5% in reality
-        calibrated_brightness = max(5, round(brightness / self.brightness_calibration_factor))
+        # NO LONGER applying calibration factor automatically
+        # Instead, we'll apply calibration ONLY if we detect the value is too low
         
-        # HARD ENFORCE the maximum limit regardless of calibration
-        # This ensures we NEVER exceed the user-specified maximum (45%)
-        calibrated_brightness = min(calibrated_brightness, self.max_brightness)
+        # First try to use the requested value directly
+        calibrated_brightness = round(brightness)
         
-        # Debug output to better understand the correction
-        print(f"Brightness: Reported: {brightness}% → Setting: {calibrated_brightness}%")
+        # If we suspect we're in an environment where reported != actual:
+        # Comment this out to disable calibration adjustment completely
+        # calibrated_brightness = max(5, round(brightness / self.brightness_calibration_factor))
+        
+        # ALWAYS enforce the range limits regardless of calibration
+        calibrated_brightness = max(self.min_brightness, 
+                               min(self.max_brightness, calibrated_brightness))
+        
+        # More detailed debug output
+        print(f"Brightness: Target: {brightness:.1f}% → Setting: {calibrated_brightness}%")
         
         if self.brightness_method == "brightnessctl":
             os.system(f"brightnessctl set {calibrated_brightness}%")
@@ -756,13 +762,19 @@ class AdaptiveBrightnessVolumeController:
                             # If it's a light-to-dark transition, move more quickly
                             if camera_brightness < 40:  # We're in a darker room
                                 # Target the lower end of the brightness range more aggressively
-                                target_brightness = self.min_brightness + (camera_brightness * 0.3 * sensitivity_boost)
-                                print(f"Dark room mode - target brightness: {target_brightness:.1f}%")
-                                return  # Skip the normal formula below
+                                # CRITICAL FIX: In dark rooms, we need LOWER brightness
+                                dark_room_value = max(5, min(15, camera_brightness * 0.5))
+                                target_brightness = dark_room_value  # Directly use low values for dark rooms
+                                print(f"🌙 Dark room mode - target brightness: {target_brightness:.1f}% (raw: {dark_room_value:.1f})")
+                                # DO NOT return here - that was causing the function to exit completely!
                         
-                        # Standard formula for normal conditions
-                        # This maps camera brightness 0-100 to screen brightness 5-45%
-                        target_brightness = 5 + (inverted_brightness * 0.4 * sensitivity_boost)
+                        # Only use standard formula if we're NOT in dark room mode
+                        if camera_brightness >= 40 or current_time - self.last_significant_change_time >= 10:
+                            # Standard formula for normal conditions
+                            # This maps camera brightness 0-100 to screen brightness 5-45%
+                            # IMPORTANT: Reduce the multiplier to avoid always maxing out
+                            target_brightness = 5 + (inverted_brightness * 0.25 * sensitivity_boost)
+                            print(f"☀️ Normal mode - target: {target_brightness:.1f}% (inverted: {inverted_brightness:.1f}, boost: {sensitivity_boost:.1f}x)")
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
