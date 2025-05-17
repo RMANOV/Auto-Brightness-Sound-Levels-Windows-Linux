@@ -200,12 +200,17 @@ class AdaptiveBrightnessVolumeController:
         self.smoothed_volume: float = 40.0
         
         # Warmup parameters to avoid initial spike
-        self.warmup_frames: int = 10  # Number of frames to ignore at startup
+        self.warmup_frames: int = 20  # Increased from 10 to 20 for smoother startup
         self.current_warmup_frame: int = 0
-        self.warmup_cooldown: float = 0.2  # Extra smoothing during warmup period
+        self.warmup_cooldown: float = 0.05  # Much slower transitions (was 0.2)
         self.is_in_warmup: bool = True
         self.initial_brightness: Optional[float] = None
         self.initial_volume: Optional[float] = None
+        
+        # Real brightness calibration - used to track actual screen vs reported values
+        self.brightness_calibration_factor: float = 0.4  # Scale factor to match real values
+        self.last_significant_change_time: float = 0.0
+        self.sensitivity_to_changes: float = 1.5  # Increase sensitivity to light changes
 
     def setup_camera(self):
         """Initialize camera with fallback to other available cameras"""
@@ -487,13 +492,21 @@ class AdaptiveBrightnessVolumeController:
 
     def set_brightness(self, brightness: float) -> None:
         """Set screen brightness as percentage"""
+        # Apply limits
         brightness = max(self.min_brightness, min(self.max_brightness, brightness))
         
+        # Apply calibration factor to correct the actual vs reported brightness
+        # This helps with the problem where 18% reported is actually 5% in reality
+        calibrated_brightness = max(5, round(brightness / self.brightness_calibration_factor))
+        
+        # Debug output to better understand the correction
+        print(f"Brightness: Reported: {brightness}% → Setting: {calibrated_brightness}%")
+        
         if self.brightness_method == "brightnessctl":
-            os.system(f"brightnessctl set {brightness}%")
+            os.system(f"brightnessctl set {calibrated_brightness}%")
             
         elif self.brightness_method == "xbacklight":
-            os.system(f"xbacklight -set {brightness}")
+            os.system(f"xbacklight -set {calibrated_brightness}")
             
         elif self.brightness_method == "sysfs":
             try:
@@ -685,13 +698,30 @@ class AdaptiveBrightnessVolumeController:
 
                     # Determine target brightness based on ambient light and screen content
                     if camera_brightness is not None:
-                        # INVERTED LOGIC: In dark room, we want higher brightness, in bright room - lower
-                        # Invert the camera brightness to get the opposite effect
-                        inverted_brightness = max(0, 65 - camera_brightness)  # 65 is a calibration point
+                        # INVERTED LOGIC: In dark room, we want lower brightness, in bright room - higher
+                        # We want to respond more dramatically to environment changes
+                        
+                        # Track last camera brightness to detect significant changes
+                        last_camera_brightness = self.prev_camera_brightness
+                        if last_camera_brightness is not None:
+                            # If we detect a significant environmental change, mark the time
+                            if abs(camera_brightness - last_camera_brightness) > 15:  # Big change
+                                self.last_significant_change_time = current_time
+                                print(f"Significant light change detected: {last_camera_brightness} → {camera_brightness}")
+                        
+                        # Adjust formula to be more reactive to room brightness
+                        # For dark rooms (camera_brightness < 30), keep screen dim (5-15%)
+                        # For bright rooms (camera_brightness > 70), make screen brighter (30-45%)
+                        inverted_brightness = max(0, 100 - camera_brightness)  # 100 gives better range
+                        
+                        # Apply higher sensitivity to make changes more noticeable
+                        sensitivity_boost = 1.0
+                        if current_time - self.last_significant_change_time < 5:  # 5 seconds after big change
+                            sensitivity_boost = self.sensitivity_to_changes  # React more strongly to recent changes
                         
                         # Fine-tune the range to ensure it stays within reasonable bounds
                         # This maps camera brightness 0-100 to screen brightness 5-45%
-                        target_brightness = 5 + (inverted_brightness * 0.6)  # Scale to fit our 5-45% range
+                        target_brightness = 5 + (inverted_brightness * 0.4 * sensitivity_boost)  # Scale to fit our range
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
@@ -699,26 +729,36 @@ class AdaptiveBrightnessVolumeController:
 
                         # Handle warmup period to avoid initial spikes
                         if self.is_in_warmup:
-                            # During the first few frames, just collect data without applying large changes
+                            # During the first several frames, start from current brightness and move very gradually
                             self.current_warmup_frame += 1
                             
-                            # Store initial values
+                            # Store the actual current brightness as starting point (not a default value)
                             if self.initial_brightness is None:
-                                self.initial_brightness = self.smoothed_brightness
-                                print(f"Initial brightness: {self.initial_brightness}%")
-                                
-                            # Show progress during warmup
+                                try:
+                                    # Try to get the real current brightness from the system
+                                    self.initial_brightness = self.get_brightness()
+                                    # Start exactly where we are now
+                                    self.smoothed_brightness = self.initial_brightness
+                                    print(f"Starting from current brightness: {self.initial_brightness}%")
+                                except Exception:
+                                    self.initial_brightness = self.smoothed_brightness
+                                    print(f"Using default initial brightness: {self.initial_brightness}%")
+                            
+                            # Show progress during extended warmup
                             if self.current_warmup_frame <= self.warmup_frames:
-                                if self.current_warmup_frame % 2 == 0:
+                                if self.current_warmup_frame % 4 == 0:  # Less frequent progress updates
                                     print(f"Calibrating... {(self.current_warmup_frame * 100) // self.warmup_frames}%")
                                 
-                                # Use much higher smoothing factor during warmup to avoid jumps
+                                # Extra gentle transitions during warmup (very small changes per frame)
+                                # This avoids the initial jump by making incredibly slow adjustments
                                 error = target_brightness - self.smoothed_brightness
                                 self.smoothed_brightness += error * (self.brightness_smoothing_factor * self.warmup_cooldown)
                             else:
                                 # End of warmup period
                                 self.is_in_warmup = False
                                 print("Calibration complete, applying normal brightness control")
+                                # Remember this as our baseline brightness after warmup
+                                self.prev_camera_brightness = camera_brightness
                         else:
                             # Normal operation - check if change is significant enough
                             brightness_diff = abs(target_brightness - self.smoothed_brightness)
