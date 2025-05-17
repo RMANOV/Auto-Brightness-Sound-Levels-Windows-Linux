@@ -784,20 +784,30 @@ class AdaptiveBrightnessVolumeController:
                         # Direct linear formula: brightness = 5 + (camera_brightness * 0.4)
                         
                         # Calculate screen brightness directly from camera brightness
+                        # Enhancement: Using power function to make values higher than direct correlation
+                        # For example: camera_brightness of 45% should yield around 30% instead of 22-23%
+                        
+                        # Apply enhancement formula with power function
+                        enhanced_camera_brightness = camera_brightness**0.8 * 1.3
+                        enhanced_camera_brightness = min(enhanced_camera_brightness, 100)
+                        
                         if camera_brightness < 30:  # Dark room (0-30)
-                            # Dark room: 5-15% brightness (linear mapping 0→5%, 30→15%)
-                            target_brightness = 5 + (camera_brightness / 30 * 10)
-                            print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
+                            # Dark room: enhanced 5-15% brightness
+                            # Original: 5 + (camera_brightness / 30 * 10)
+                            target_brightness = 5 + (enhanced_camera_brightness / 30 * 12)  # Boosted to 12% range
+                            print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
                             
                         elif camera_brightness > 70:  # Bright room (70-100)
-                            # Bright room: 35-45% brightness (linear mapping 70→35%, 100→45%)
-                            target_brightness = 35 + ((camera_brightness - 70) / 30 * 10)
-                            print(f"☀️ Bright room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
+                            # Bright room: enhanced 35-45% brightness
+                            # Original: 35 + ((camera_brightness - 70) / 30 * 10)
+                            target_brightness = 35 + ((enhanced_camera_brightness - 70) / 30 * 10)
+                            print(f"☀️ Bright room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
                             
                         else:  # Medium room (30-70)
-                            # Medium brightness: 15-35% (linear mapping 30→15%, 70→35%)
-                            target_brightness = 15 + ((camera_brightness - 30) / 40 * 20)
-                            print(f"🌤️ Medium light - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f})")
+                            # Medium brightness: enhanced 15-35% brightness
+                            # Original: 15 + ((camera_brightness - 30) / 40 * 20)
+                            target_brightness = 15 + ((enhanced_camera_brightness - 30) / 40 * 24)  # Boosted to 24% range
+                            print(f"🌤️ Medium light - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, enhanced: {enhanced_camera_brightness:.1f})")
                         
                         # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
@@ -880,24 +890,30 @@ class AdaptiveBrightnessVolumeController:
                             # This makes quieter sounds result in lower volumes and 
                             # prevents loud sounds from being too loud
                             
-                            # More gentle curve factor for balanced volume in quiet rooms
-                            curve_factor = 0.45  # Reduced to get a more gentle curve
+                            # Enhanced volume calculation to be higher than direct correlation
+                            # Increase curve factor for higher volume response
+                            curve_factor = 0.55  # Increased from 0.45 for higher overall volume
                             
                             # Adjusted multiplier for better response at low noise levels
-                            multiplier = 10  # Reduced for less aggressive response
+                            multiplier = 12  # Increased from 10 for stronger response
                             
-                            # Smaller bias factor for a more subtle push to the base volume
-                            # The goal is to get around 20% volume in quiet rooms
-                            bias = 0.15  # Reduced bias for lower overall volume
+                            # Increased bias factor for a higher base volume
+                            # The goal is to get around 25-30% volume in quiet rooms instead of 20%
+                            bias = 0.22  # Increased from 0.15 for higher overall volume
                             
-                            # Calculate adjusted noise level with balanced curve
-                            adjusted_noise = curve_factor * np.log10(1 + multiplier * normalized_noise) + bias
+                            # Calculate adjusted noise level with enhanced curve for higher values
+                            # Power function to boost lower values more (similar to brightness enhancement)
+                            normalized_noise_enhanced = normalized_noise**0.8 * 1.2
+                            normalized_noise_enhanced = min(normalized_noise_enhanced, 1.0)
+                            
+                            # Apply enhanced formula with logarithmic curve
+                            adjusted_noise = curve_factor * np.log10(1 + multiplier * normalized_noise_enhanced) + bias
                             
                             # Ensure the adjusted value stays between 0-1
                             adjusted_noise = max(0.0, min(1.0, adjusted_noise))
                         else:
                             # Base level adjustment for complete silence
-                            adjusted_noise = 0.15  # Reduced to give approximately 20% volume
+                            adjusted_noise = 0.22  # Increased from 0.15 to give approximately 25-30% volume
                             
                         volume_range = self.max_volume - self.min_volume
                         target_volume = adjusted_noise * volume_range + self.min_volume
