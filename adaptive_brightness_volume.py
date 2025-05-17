@@ -411,11 +411,13 @@ class AdaptiveBrightnessVolumeController:
             brightness = np.mean(img) / 255
             self.screen_capture_error_count = 0  # Reset error count on success
 
-            # Adjust brightness factor based on screen content
-            if brightness > 0.7:  # Very bright content
-                return 0.8  # Reduce screen brightness
-            elif brightness < 0.3:  # Dark content
-                return 1.2  # Increase screen brightness slightly
+            # Adjust brightness factor based on screen content - INVERTED LOGIC
+            # For bright content, we want to INCREASE brightness to improve visibility
+            # For dark content, we want to DECREASE brightness to reduce eye strain
+            if brightness > 0.7:  # Very bright content (white documents, etc)
+                return 1.2  # Increase screen brightness for better visibility
+            elif brightness < 0.3:  # Dark content (dark mode apps, etc)
+                return 0.8  # Reduce screen brightness for comfort with dark content
             else:
                 return 1.0  # Neutral adjustment
         except Exception as e:
@@ -683,11 +685,17 @@ class AdaptiveBrightnessVolumeController:
 
                     # Determine target brightness based on ambient light and screen content
                     if camera_brightness is not None:
-                        # Apply screen content factor to the camera brightness if available
+                        # INVERTED LOGIC: In dark room, we want higher brightness, in bright room - lower
+                        # Invert the camera brightness to get the opposite effect
+                        inverted_brightness = max(0, 65 - camera_brightness)  # 65 is a calibration point
+                        
+                        # Fine-tune the range to ensure it stays within reasonable bounds
+                        # This maps camera brightness 0-100 to screen brightness 5-45%
+                        target_brightness = 5 + (inverted_brightness * 0.6)  # Scale to fit our 5-45% range
+                        
+                        # Apply additional screen content analysis if available
                         if SCREEN_CAPTURE_AVAILABLE:
-                            target_brightness = camera_brightness * self.screen_brightness_factor
-                        else:
-                            target_brightness = camera_brightness
+                            target_brightness = target_brightness * self.screen_brightness_factor
 
                         # Handle warmup period to avoid initial spikes
                         if self.is_in_warmup:
