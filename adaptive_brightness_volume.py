@@ -316,6 +316,7 @@ class AdaptiveBrightnessVolumeController:
         return self.calculate_brightness(gray_frame)
 
     def analyze_screen_content(self) -> float:
+        global SCREEN_CAPTURE_AVAILABLE
         if not SCREEN_CAPTURE_AVAILABLE:
             return 1.0  # Neutral adjustment if screen capture not available
 
@@ -421,7 +422,6 @@ class AdaptiveBrightnessVolumeController:
             # After too many errors, try to disable the problematic method
             if self.screen_capture_error_count > self.max_screen_errors + 10:
                 print(f"Warning: Disabling problematic screen capture method: {SCREEN_CAPTURE_METHOD}")
-                global SCREEN_CAPTURE_AVAILABLE
                 SCREEN_CAPTURE_AVAILABLE = False
                 
             return 1.0
