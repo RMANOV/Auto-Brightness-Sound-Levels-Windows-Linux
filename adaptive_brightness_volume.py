@@ -66,7 +66,7 @@ if not SCREEN_CAPTURE_AVAILABLE:
 class AdaptiveBrightnessVolumeController:
     def __init__(self, camera_index: int = 0,
                  brightness_range: Tuple[int, int] = (5, 45),
-                 volume_range: Tuple[int, int] = (2, 60)):
+                 volume_range: Tuple[int, int] = (3, 35)):
         self.system = platform.system().lower()
         if self.system not in ["linux"]:
             print(f"Currently only Linux is supported. Detected: {self.system}")
@@ -130,8 +130,13 @@ class AdaptiveBrightnessVolumeController:
         # Audio settings
         self.audio_duration: float = 0.1  # seconds
         self.audio_samplerate: int = 44100  # Hz
-        self.min_noise_level: float = 1e-5
-        self.max_noise_level: float = 1e-2
+        
+        # Noise level thresholds - adjusted for more comfortable volume range
+        # Typical ambient room noise is around 1e-4 to 5e-4
+        # Conversation/music might be around 1e-3 to 5e-3
+        # Loud environments can be above 1e-2
+        self.min_noise_level: float = 5e-6  # Very quiet environment
+        self.max_noise_level: float = 8e-3  # Fairly loud environment
 
         # State variables
         self.current_brightness: float = 30.0
@@ -175,18 +180,60 @@ class AdaptiveBrightnessVolumeController:
             print(msg)
             self.cap = cast(Optional[cv2.VideoCapture], None)
 
+    def load_saved_state(self) -> Tuple[Optional[float], Optional[float]]:
+        """Load previously saved brightness and volume settings"""
+        try:
+            config_file = os.path.expanduser("~/.config/adaptive-controller/last_state.txt")
+            if os.path.exists(config_file):
+                # Read saved settings
+                brightness = None
+                volume = None
+                timestamp = None
+                
+                with open(config_file, "r") as f:
+                    for line in f:
+                        if line.startswith("brightness="):
+                            brightness = float(line.strip().split("=")[1])
+                        elif line.startswith("volume="):
+                            volume = float(line.strip().split("=")[1])
+                        elif line.startswith("timestamp="):
+                            timestamp = int(line.strip().split("=")[1])
+                
+                # Check if settings are not too old (max 24 hours)
+                if timestamp and time.time() - timestamp < 24 * 60 * 60:
+                    return brightness, volume
+        except Exception as e:
+            print(f"Warning: Could not load saved settings: {e}")
+            
+        return None, None
+        
     def setup_state(self) -> None:
+        # Try to load saved settings
+        saved_brightness, saved_volume = self.load_saved_state()
+        
+        # Setup brightness
         try:
             self.current_brightness = self.get_brightness()
         except Exception:
-            self.current_brightness = 30.0
+            if saved_brightness is not None:
+                print(f"Using saved brightness: {saved_brightness}%")
+                self.current_brightness = saved_brightness
+            else:
+                self.current_brightness = 30.0
+        
         self.smoothed_brightness = self.current_brightness
         self.prev_camera_brightness = None
 
+        # Setup volume
         try:
             self.current_volume = float(self.get_volume())
         except Exception:
-            self.current_volume = 40.0
+            if saved_volume is not None:
+                print(f"Using saved volume: {saved_volume}%")
+                self.current_volume = saved_volume
+            else:
+                self.current_volume = self.min_volume + (self.max_volume - self.min_volume) / 2
+        
         self.smoothed_volume = self.current_volume
 
     def on_activity(self) -> None:
@@ -502,12 +549,26 @@ class AdaptiveBrightnessVolumeController:
                         audio = self.capture_audio()
                         noise_level = self.compute_noise_level(audio)
 
-                        # Map noise level to volume percentage
+                        # Map noise level to volume percentage with adaptive curve
                         noise_range = self.max_noise_level - self.min_noise_level
                         normalized_noise = (noise_level - self.min_noise_level) / noise_range
                         normalized_noise = max(0.0, min(1.0, normalized_noise))
+                        
+                        # Apply a logarithmic curve to make the volume response more natural
+                        # Human hearing perception is roughly logarithmic
+                        if normalized_noise > 0:
+                            # Mapping to the narrower 3-35% range with logarithmic adjustment
+                            # This makes quieter sounds result in lower volumes and 
+                            # prevents loud sounds from being too loud
+                            curve_factor = 0.4  # Controls how aggressive the curve is (lower = more aggressive)
+                            adjusted_noise = curve_factor * np.log10(1 + 9 * normalized_noise)
+                            # Ensure the adjusted value stays between 0-1
+                            adjusted_noise = max(0.0, min(1.0, adjusted_noise))
+                        else:
+                            adjusted_noise = 0
+                            
                         volume_range = self.max_volume - self.min_volume
-                        target_volume = normalized_noise * volume_range + self.min_volume
+                        target_volume = adjusted_noise * volume_range + self.min_volume
 
                         # Smooth volume changes
                         volume_error = target_volume - self.smoothed_volume
@@ -544,6 +605,22 @@ class AdaptiveBrightnessVolumeController:
         except KeyboardInterrupt:
             print("Stopping controller...")
         finally:
+            # Save current brightness and volume settings before exiting
+            try:
+                # Create configuration directory if it doesn't exist
+                config_dir = os.path.expanduser("~/.config/adaptive-controller")
+                os.makedirs(config_dir, exist_ok=True)
+                
+                # Save settings
+                with open(f"{config_dir}/last_state.txt", "w") as f:
+                    f.write(f"brightness={round(self.smoothed_brightness)}\n")
+                    f.write(f"volume={round(self.smoothed_volume)}\n")
+                    f.write(f"timestamp={int(time.time())}\n")
+                    
+                print(f"Settings saved to {config_dir}/last_state.txt")
+            except Exception as e:
+                print(f"Warning: Could not save settings: {e}")
+                
             self.stop_event.set()
             if self.cap:
                 self.cap.release()
@@ -568,11 +645,17 @@ if __name__ == '__main__':
     
     try:
         controller = AdaptiveBrightnessVolumeController()
-        print("Starting adaptive brightness and volume controller...")
+        print("\nStarting adaptive brightness and volume controller...")
+        print(f"Brightness range: {controller.min_brightness}% - {controller.max_brightness}%")
+        print(f"Volume range: {controller.min_volume}% - {controller.max_volume}%")
         print("Detected brightness control method:", controller.brightness_method)
         if SCREEN_CAPTURE_AVAILABLE:
             print("Screen capture method:", SCREEN_CAPTURE_METHOD)
-        print("Press Ctrl+C to stop")
+        if AUDIO_AVAILABLE:
+            print("Audio control: Enabled (adaptive based on ambient noise)")
+        else:
+            print("Audio control: Disabled")
+        print("\nPress Ctrl+C to stop")
         controller.run()
     except KeyboardInterrupt:
         print("\nStopping controller...")
