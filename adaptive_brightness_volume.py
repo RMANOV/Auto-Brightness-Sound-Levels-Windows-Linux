@@ -45,11 +45,14 @@ class AdaptiveBrightnessVolumeController:
             print("Support for Windows and other Linux distributions coming soon")
             sys.exit(1)
             
-        # Check for required tools
-        if os.system("which brightnessctl > /dev/null 2>&1") != 0:
-            print("Error: brightnessctl not found! Please install it with:")
-            print("  sudo apt install brightnessctl   # For Debian/Ubuntu")
-            print("  sudo dnf install brightnessctl   # For Fedora")
+        # Check for brightness control tools
+        self.brightness_method = self._detect_brightness_method()
+        if not self.brightness_method:
+            print("Error: No supported brightness control method found!")
+            print("Options:")
+            print("  1. Install brightnessctl: sudo dnf install brightnessctl")
+            print("  2. Install xbacklight: sudo dnf install xbacklight")
+            print("  3. Make sure /sys/class/backlight/ is accessible")
             sys.exit(1)
 
         # Configuration
@@ -103,12 +106,36 @@ class AdaptiveBrightnessVolumeController:
         self.smoothed_volume: float = 40.0
 
     def setup_camera(self):
+        """Initialize camera with fallback to other available cameras"""
+        # Try the specified camera index first
         self.cap = cv2.VideoCapture(self.camera_index)
-        # Reduce camera resolution for performance
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        
+        # If the specified camera doesn't work, try other indices
         if not self.cap.isOpened():
-            print(f"Warning: Could not open camera {self.camera_index}")
+            print(f"Warning: Could not open camera {self.camera_index}, trying alternatives...")
+            
+            # Try camera indices 0-9
+            for idx in range(10):
+                if idx == self.camera_index:
+                    continue  # Skip the one we already tried
+                    
+                test_cap = cv2.VideoCapture(idx)
+                if test_cap.isOpened():
+                    print(f"Found working camera at index {idx}")
+                    self.cap = test_cap
+                    self.camera_index = idx
+                    break
+                else:
+                    test_cap.release()
+        
+        # If we have a working camera, configure it
+        if self.cap is not None and self.cap.isOpened():
+            # Reduce camera resolution for performance
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            print(f"Camera initialized at index {self.camera_index}")
+        else:
+            print("No working camera found")
             msg = "Using fallback brightness control without ambient sensing"
             print(msg)
             self.cap = cast(Optional[cv2.VideoCapture], None)
@@ -176,29 +203,138 @@ class AdaptiveBrightnessVolumeController:
             print(f"Screen analysis error: {e}")
             return 1.0
 
+    def _detect_brightness_method(self) -> str:
+        """Detect available brightness control method"""
+        # Check for brightnessctl
+        if os.system("which brightnessctl > /dev/null 2>&1") == 0:
+            return "brightnessctl"
+            
+        # Check for xbacklight
+        if os.system("which xbacklight > /dev/null 2>&1") == 0:
+            return "xbacklight"
+            
+        # Check for direct sys file access
+        backlight_dirs = os.listdir("/sys/class/backlight") if os.path.exists("/sys/class/backlight") else []
+        if backlight_dirs:
+            self.backlight_dir = f"/sys/class/backlight/{backlight_dirs[0]}"
+            try:
+                with open(f"{self.backlight_dir}/brightness", "r") as f:
+                    f.read()
+                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                    f.read()
+                return "sysfs"
+            except (IOError, PermissionError):
+                pass
+                
+        return ""
+        
     def get_brightness(self) -> float:
-        # Use brightnessctl to get current brightness (Linux-specific)
-        brightness = os.popen("brightnessctl get").read().strip()
-        max_brightness = os.popen("brightnessctl max").read().strip()
-        return float(brightness) / float(max_brightness) * 100
+        """Get current screen brightness as percentage"""
+        if self.brightness_method == "brightnessctl":
+            brightness = os.popen("brightnessctl get").read().strip()
+            max_brightness = os.popen("brightnessctl max").read().strip()
+            return float(brightness) / float(max_brightness) * 100
+            
+        elif self.brightness_method == "xbacklight":
+            brightness = os.popen("xbacklight -get").read().strip()
+            return float(brightness)
+            
+        elif self.brightness_method == "sysfs":
+            try:
+                with open(f"{self.backlight_dir}/brightness", "r") as f:
+                    brightness = int(f.read().strip())
+                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                    max_brightness = int(f.read().strip())
+                return brightness / max_brightness * 100
+            except (IOError, ValueError) as e:
+                print(f"Error reading brightness: {e}")
+                return 50.0
+                
+        return 50.0  # Fallback
 
     def set_brightness(self, brightness: float) -> None:
+        """Set screen brightness as percentage"""
         brightness = max(self.min_brightness, min(self.max_brightness, brightness))
-        os.system(f"brightnessctl set {brightness}%")
+        
+        if self.brightness_method == "brightnessctl":
+            os.system(f"brightnessctl set {brightness}%")
+            
+        elif self.brightness_method == "xbacklight":
+            os.system(f"xbacklight -set {brightness}")
+            
+        elif self.brightness_method == "sysfs":
+            try:
+                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                    max_brightness = int(f.read().strip())
+                    
+                # Convert percentage to absolute value
+                value = int((brightness / 100) * max_brightness)
+                
+                # Write the new brightness value
+                try:
+                    with open(f"{self.backlight_dir}/brightness", "w") as f:
+                        f.write(str(value))
+                except PermissionError:
+                    # Try with sudo if direct write fails
+                    os.system(f"echo {value} | sudo tee {self.backlight_dir}/brightness > /dev/null")
+            except Exception as e:
+                print(f"Error setting brightness: {e}")
 
     def get_volume(self) -> int:
+        """Get current volume level as percentage"""
         try:
-            output = os.popen("amixer get Master").read()
-            matches = re.search(r'\[([0-9]+)%\]', output)
-            if matches:
-                return int(matches.group(1))
-            return 40
-        except Exception:
+            # Try amixer first
+            if os.system("which amixer > /dev/null 2>&1") == 0:
+                output = os.popen("amixer get Master").read()
+                matches = re.search(r'\[([0-9]+)%\]', output)
+                if matches:
+                    return int(matches.group(1))
+            
+            # Try pactl (PulseAudio)
+            if os.system("which pactl > /dev/null 2>&1") == 0:
+                output = os.popen("pactl list sinks | grep Volume").read()
+                matches = re.search(r'(\d+)%', output)
+                if matches:
+                    return int(matches.group(1))
+                    
+            # Try wpctl (Pipewire)
+            if os.system("which wpctl > /dev/null 2>&1") == 0:
+                output = os.popen("wpctl get-volume @DEFAULT_AUDIO_SINK@").read()
+                matches = re.search(r'Volume: ([0-9.]+)', output)
+                if matches:
+                    volume_float = float(matches.group(1))
+                    return int(volume_float * 100)
+                    
+            return 40  # Default if no method worked
+        except Exception as e:
+            print(f"Error getting volume: {e}")
             return 40
 
     def set_volume(self, volume: float) -> None:
+        """Set volume level as percentage"""
         volume = max(self.min_volume, min(self.max_volume, int(volume)))
-        os.system(f"amixer set Master {volume}%")
+        
+        # Try multiple methods in sequence until one works
+        success = False
+        
+        # Method 1: amixer
+        if not success and os.system("which amixer > /dev/null 2>&1") == 0:
+            exit_code = os.system(f"amixer set Master {volume}% > /dev/null 2>&1")
+            success = (exit_code == 0)
+            
+        # Method 2: pactl (PulseAudio)
+        if not success and os.system("which pactl > /dev/null 2>&1") == 0:
+            exit_code = os.system(f"pactl set-sink-volume @DEFAULT_SINK@ {volume}% > /dev/null 2>&1")
+            success = (exit_code == 0)
+            
+        # Method 3: wpctl (PipeWire)
+        if not success and os.system("which wpctl > /dev/null 2>&1") == 0:
+            volume_float = volume / 100.0
+            exit_code = os.system(f"wpctl set-volume @DEFAULT_AUDIO_SINK@ {volume_float} > /dev/null 2>&1")
+            success = (exit_code == 0)
+            
+        if not success:
+            print(f"Warning: Failed to set volume to {volume}%")
 
     def capture_audio(self) -> np.ndarray:
         if not AUDIO_AVAILABLE:
@@ -353,7 +489,15 @@ class AdaptiveBrightnessVolumeController:
 
 
 if __name__ == '__main__':
-    controller = AdaptiveBrightnessVolumeController()
-    print("Starting adaptive brightness and volume controller...")
-    print("Press Ctrl+C to stop")
-    controller.run()
+    try:
+        controller = AdaptiveBrightnessVolumeController()
+        print("Starting adaptive brightness and volume controller...")
+        print("Detected brightness control method:", controller.brightness_method)
+        print("Press Ctrl+C to stop")
+        controller.run()
+    except KeyboardInterrupt:
+        print("\nStopping controller...")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
