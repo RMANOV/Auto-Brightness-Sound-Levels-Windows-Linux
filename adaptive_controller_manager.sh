@@ -47,17 +47,83 @@ is_controller_running() {
     return 1  # Not running
 }
 
+# Function to perform quick flash detection for significant changes
+flash_detection_check() {
+    # Quick 2-second environmental check for dramatic changes
+    local temp_log="/tmp/flash_detection.log"
+    
+    # Get current saved state
+    local saved_brightness=30
+    local saved_volume=20
+    
+    if [[ -f "/home/rmanov/.config/adaptive-controller/last_state.txt" ]]; then
+        saved_brightness=$(grep "brightness=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 30)
+        saved_volume=$(grep "volume=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 20)
+    fi
+    
+    # Quick environmental sampling (2 seconds only)
+    cd "$SCRIPT_DIR"
+    timeout 2s python3 -c "
+import sys
+sys.path.append('$SCRIPT_DIR')
+try:
+    from adaptive_brightness_volume import AdaptiveBrightnessVolumeController
+    import cv2
+    import numpy as np
+    
+    # Quick camera check
+    cap = cv2.VideoCapture(0)
+    if cap.isOpened():
+        ret, frame = cap.read()
+        if ret:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            current_brightness = np.mean(gray) / 255 * 100
+            
+            # Calculate percentage change from saved state
+            brightness_change = abs(current_brightness - $saved_brightness) / max($saved_brightness, 1) * 100
+            
+            print(f'flash_brightness_change:{brightness_change:.1f}')
+        cap.release()
+    cv2.destroyAllWindows()
+except Exception as e:
+    print(f'flash_error:{e}')
+" > "$temp_log" 2>&1
+    
+    # Parse results
+    if [[ -f "$temp_log" ]]; then
+        local brightness_change=$(grep "flash_brightness_change:" "$temp_log" | cut -d':' -f2 2>/dev/null || echo 0)
+        
+        # Check if change is significant (>40%)
+        if (( $(echo "$brightness_change > 40.0" | bc -l 2>/dev/null || echo 0) )); then
+            log_message "Flash detection: Significant change detected (${brightness_change}% brightness change)"
+            rm -f "$temp_log"
+            return 0  # Significant change - should activate
+        else
+            log_message "Flash detection: No significant change (${brightness_change}% brightness change) - skipping activation"
+            rm -f "$temp_log"
+            return 1  # No significant change - skip activation
+        fi
+    fi
+    
+    rm -f "$temp_log"
+    return 1  # Default to skip if detection failed
+}
+
 # Function to determine if we should be active based on time
 should_be_active() {
-    # Night hours check (1 AM - 6 AM on weekdays, 2 AM - 8 AM on weekends)
-    if [[ $CURRENT_DAY -le 5 ]]; then  # Weekdays
-        if [[ $CURRENT_HOUR -ge 1 && $CURRENT_HOUR -lt 6 ]]; then
-            return 1  # Inactive during deep night on weekdays
+    # Special deep night work mode (2 AM - 5 AM) - minimal disruption
+    if [[ $CURRENT_HOUR -ge 2 && $CURRENT_HOUR -lt 5 ]]; then
+        log_message "Deep night work mode (2-5 AM) - minimal activity"
+        return 1  # Inactive during deep night work hours
+    fi
+    
+    # Extended night hours check for sleep (11 PM - 7 AM)
+    if [[ $CURRENT_HOUR -ge 23 || $CURRENT_HOUR -lt 7 ]]; then
+        # Flash detection during extended night hours
+        if ! flash_detection_check; then
+            return 1  # No significant changes during night
         fi
-    else  # Weekends
-        if [[ $CURRENT_HOUR -ge 2 && $CURRENT_HOUR -lt 8 ]]; then
-            return 1  # Inactive during deep night on weekends
-        fi
+        log_message "Night mode: Significant environmental change detected - activating"
     fi
     
     # Check if user session is active (for KDE Plasma)
@@ -72,7 +138,12 @@ should_be_active() {
         fi
     fi
     
-    return 0  # Should be active
+    # During normal hours, perform flash detection before activation
+    if ! flash_detection_check; then
+        return 1  # No significant environmental changes detected
+    fi
+    
+    return 0  # Should be active - significant changes detected
 }
 
 # Function to check system load and resources
