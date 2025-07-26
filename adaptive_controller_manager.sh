@@ -47,9 +47,9 @@ is_controller_running() {
     return 1  # Not running
 }
 
-# Function to perform quick flash detection for significant changes
+# Function to perform simplified flash detection for significant changes
 flash_detection_check() {
-    # Quick 2-second environmental check for dramatic changes
+    # Simple approach: 50-second wait (35s warmup + 15s buffer) then compare with saved state
     local temp_log="/tmp/flash_detection.log"
     
     # Get current saved state
@@ -61,51 +61,76 @@ flash_detection_check() {
         saved_volume=$(grep "volume=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 20)
     fi
     
-    # Quick environmental sampling (2 seconds only)
+    log_message "Flash detection: Starting simplified 50-second detection (35s warmup + 15s buffer)"
+    
+    # Simple environmental sampling with generous buffer
     cd "$SCRIPT_DIR"
-    timeout 2s python3 -c "
+    timeout 60s python3 -c "
 import sys
 sys.path.append('$SCRIPT_DIR')
+import time
+import cv2
+import numpy as np
+
 try:
-    from adaptive_brightness_volume import AdaptiveBrightnessVolumeController
-    import cv2
-    import numpy as np
+    print('flash_status:starting_simplified_detection')
     
-    # Quick camera check
+    # Initialize camera
     cap = cv2.VideoCapture(0)
-    if cap.isOpened():
-        ret, frame = cap.read()
-        if ret:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            current_brightness = np.mean(gray) / 255 * 100
-            
-            # Calculate percentage change from saved state
-            brightness_change = abs(current_brightness - $saved_brightness) / max($saved_brightness, 1) * 100
-            
-            print(f'flash_brightness_change:{brightness_change:.1f}')
-        cap.release()
-    cv2.destroyAllWindows()
+    
+    if not cap.isOpened():
+        print('flash_error:camera_not_available')
+        sys.exit(1)
+    
+    # Configure camera quickly
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    
+    # Wait full 50 seconds (35s warmup + 15s buffer for slow systems)
+    print('flash_status:waiting_50_seconds_for_stability')
+    time.sleep(50)
+    
+    # Take simple measurement after full wait
+    print('flash_status:taking_final_measurement')
+    ret, frame = cap.read()
+    if ret:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        current_brightness = np.mean(gray) / 255 * 100
+        
+        # Calculate percentage change from saved state
+        brightness_change = abs(current_brightness - $saved_brightness) / max($saved_brightness, 1) * 100
+        
+        print(f'flash_brightness:{current_brightness:.1f}')
+        print(f'flash_change:{brightness_change:.1f}')
+        print(f'flash_saved:$saved_brightness')
+    else:
+        print('flash_error:no_measurement_possible')
+        
+    cap.release()
+        
 except Exception as e:
     print(f'flash_error:{e}')
 " > "$temp_log" 2>&1
     
     # Parse results
     if [[ -f "$temp_log" ]]; then
-        local brightness_change=$(grep "flash_brightness_change:" "$temp_log" | cut -d':' -f2 2>/dev/null || echo 0)
+        local brightness_change=$(grep "flash_change:" "$temp_log" | cut -d':' -f2 2>/dev/null || echo 0)
+        local current_brightness=$(grep "flash_brightness:" "$temp_log" | cut -d':' -f2 2>/dev/null || echo 0)
         
         # Check if change is significant (>40%)
         if (( $(echo "$brightness_change > 40.0" | bc -l 2>/dev/null || echo 0) )); then
-            log_message "Flash detection: Significant change detected (${brightness_change}% brightness change)"
+            log_message "Flash detection: Significant change detected - Current: ${current_brightness}%, Saved: ${saved_brightness}%, Change: ${brightness_change}%"
             rm -f "$temp_log"
             return 0  # Significant change - should activate
         else
-            log_message "Flash detection: No significant change (${brightness_change}% brightness change) - skipping activation"
+            log_message "Flash detection: No significant change - Current: ${current_brightness}%, Saved: ${saved_brightness}%, Change: ${brightness_change}% (threshold: 40%)"
             rm -f "$temp_log"
             return 1  # No significant change - skip activation
         fi
     fi
     
     rm -f "$temp_log"
+    log_message "Flash detection: Failed to get measurements - defaulting to skip"
     return 1  # Default to skip if detection failed
 }
 
@@ -168,7 +193,7 @@ system_load_acceptable() {
     return 0
 }
 
-# Function to start the controller
+# Function to start the controller for optimized burst mode
 start_controller() {
     if is_controller_running; then
         log_message "Controller already running"
@@ -192,7 +217,7 @@ start_controller() {
         return 1
     fi
     
-    log_message "Starting adaptive controller..."
+    log_message "Starting adaptive controller in optimized burst mode..."
     
     # Change to script directory
     cd "$SCRIPT_DIR" || {
@@ -201,8 +226,9 @@ start_controller() {
         return 1
     }
     
-    # Start the controller in background
-    nohup python3 "$PYTHON_SCRIPT" >> "$LOG_FILE" 2>&1 &
+    # Start controller with timeout for burst mode
+    # Run for 8 minutes (enough for full warmup + adjustments + stabilization)
+    timeout 480s python3 "$PYTHON_SCRIPT" >> "$LOG_FILE" 2>&1 &
     local python_pid=$!
     
     # Save PID
@@ -212,8 +238,30 @@ start_controller() {
     sleep 3
     
     if kill -0 "$python_pid" 2>/dev/null; then
-        log_message "Controller started successfully (PID: $python_pid)"
+        log_message "Controller started successfully in burst mode (PID: $python_pid, 8min timeout)"
         rm -f "$LOCK_FILE"
+        
+        # Set up automatic cleanup after burst mode
+        (
+            # Wait for either timeout or normal completion
+            wait $python_pid 2>/dev/null
+            local exit_code=$?
+            
+            # Clean up PID file
+            if [[ -f "$PID_FILE" ]]; then
+                local stored_pid=$(cat "$PID_FILE")
+                if [[ "$stored_pid" == "$python_pid" ]]; then
+                    rm -f "$PID_FILE"
+                fi
+            fi
+            
+            if [[ $exit_code -eq 124 ]]; then
+                log_message "Controller completed burst mode successfully (8min timeout)"
+            else
+                log_message "Controller completed burst mode (exit code: $exit_code)"
+            fi
+        ) &
+        
         return 0
     else
         log_message "Controller failed to start"

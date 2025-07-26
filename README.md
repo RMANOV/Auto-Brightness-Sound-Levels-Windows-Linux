@@ -32,12 +32,13 @@ tail -f /tmp/adaptive_controller.log
 ./adaptive_controller_manager.sh start|stop|restart
 ```
 
-**🧮 Real-World Optimization:** The system uses a **30-minute cron interval with flash detection** for minimal system impact:
+**🧮 Real-World Optimization:** The system uses a **30-minute cron interval with simplified flash detection** for minimal system impact:
 - **81% energy savings** vs continuous running on laptop systems (even better!)
-- **Flash detection** - only activates on >40% environmental changes
+- **Simplified flash detection** - 50-second wait (35s warmup + 15s buffer) then compares with saved state
+- **Only activates on >40% environmental changes** using reliable saved state comparison
 - **Eliminates taskbar icon flickering** and fan activation issues
 - **Special deep night mode** (2-5 AM) for uninterrupted work sessions
-- **Smart threshold detection** prevents unnecessary activations
+- **Simple approach** eliminates complex measurements and timing conflicts
 
 ## 🔥 Technical Achievements
 
@@ -74,10 +75,11 @@ Noise filtering and normalization
 
 🤖 **Intelligent Scheduling System**:
 - **Real-World Optimized Intervals**: 30-minute cron schedule for 81% energy savings
-- **Flash Detection Technology**: Only activates on >40% environmental changes
+- **Simplified Flash Detection**: 50-second wait then compares with saved state values
+- **Only Activates on >40% Environmental Changes**: Using reliable saved state comparison
 - **Eliminates System Impact**: No more taskbar flickering or fan activation
 - **Deep Night Work Mode**: Special 2-5 AM mode for uninterrupted work sessions
-- **Smart Threshold Detection**: Prevents unnecessary process activations
+- **Simple Approach**: Eliminates complex measurements and timing conflicts
 - **Time-based Activation**: Intelligent day/night cycle adaptation
 - **System Resource Monitoring**: CPU load and memory usage protection
 - **Health Monitoring**: Automatic process recovery with minimal frequency
@@ -120,12 +122,13 @@ python3 benchmark_numba.py
 
 ✨ **Significantly improved user comfort** and productivity through intelligent adaptation  
 ⚡ **Massive performance gains** with Numba JIT compilation (10-100x faster operations)  
-🔋 **81% energy savings** through flash detection and optimized scheduling (ideal for laptops)  
-🤖 **Autonomous operation** with intelligent threshold detection and minimal system impact  
+🔋 **81% energy savings** through simplified flash detection and optimized scheduling (ideal for laptops)  
+🤖 **Autonomous operation** with reliable saved state comparison and minimal system impact  
 🖥️ **Enhanced display and audio experience** with eliminated taskbar flickering and fan noise  
-💻 **Professional system integration** with smart activation and deep night work mode  
-📱 **Superior battery life optimization** through 30-minute intervals and flash detection  
-🌙 **Uninterrupted deep work** with special 2-5 AM mode for focused sessions
+💻 **Professional system integration** with simplified activation and deep night work mode  
+📱 **Superior battery life optimization** through 30-minute intervals and 50-second detection  
+🌙 **Uninterrupted deep work** with special 2-5 AM mode for focused sessions  
+🎯 **Simplified reliability** eliminating complex measurements and timing conflicts
 
 This project demonstrates expertise in computer vision, signal processing, multi-threaded programming, and system optimization, while delivering a practical solution for everyday computing needs.
 
