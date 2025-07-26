@@ -95,5 +95,3 @@ echo "  $MANAGER_SCRIPT status"
 echo ""
 echo "To view logs:"
 echo "  tail -f /tmp/adaptive_controller.log"
-
-EOF
