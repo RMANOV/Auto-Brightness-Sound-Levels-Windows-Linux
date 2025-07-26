@@ -963,6 +963,13 @@ class AdaptiveBrightnessVolumeController:
                             float(self.max_brightness)
                         )
                         
+                        # Calculate boost factor for logging (non-JIT version for display)
+                        boost_factor = 1.0
+                        if 35.0 <= camera_brightness <= 55.0:
+                            distance_from_45 = abs(camera_brightness - 45.0)
+                            max_boost = 1.35
+                            boost_factor = max_boost - (distance_from_45 / 10.0 * (max_boost - 1.0))
+                        
                         # Print detailed information about the calculation
                         if camera_brightness < 30:
                             print(f"🌙 Dark room - target: {target_brightness:.1f}% (camera: {camera_brightness:.1f}, boost: {boost_factor:.2f}x)")
@@ -1014,6 +1021,7 @@ class AdaptiveBrightnessVolumeController:
                             # Normal operation - ALWAYS apply changes, but smooth the transition
                             # Apply the increased adjustment speed (50% faster + boost during changes)
                             smooth_factor = self.brightness_smoothing_factor * adjustment_boost
+                            old_brightness = self.smoothed_brightness
                             self.smoothed_brightness = self._smooth_transition_jit(
                                 self.smoothed_brightness,
                                 target_brightness,
@@ -1021,8 +1029,9 @@ class AdaptiveBrightnessVolumeController:
                             )
                             
                             # Debug output if significant changes are happening
+                            error = target_brightness - old_brightness
                             if abs(error) > 2.0:
-                                print(f"Adjusting brightness: {self.smoothed_brightness:.1f}% → {target_brightness:.1f}% " +
+                                print(f"Adjusting brightness: {old_brightness:.1f}% → {target_brightness:.1f}% " +
                                       f"(change rate: {smooth_factor:.2f}, step: {error * smooth_factor:.2f})")
                                 
                         # Apply limits to brightness
