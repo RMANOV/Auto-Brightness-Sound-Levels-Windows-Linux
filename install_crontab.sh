@@ -18,16 +18,16 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # Adaptive Brightness & Volume Controller - Intelligent Scheduling
 # Optimized for minimal system impact and user experience
 # 
-# Real-world optimized approach with simplified flash detection:
+# Real-world optimized approach with enhanced flash detection:
 # - 30-minute intervals: 81% energy savings vs continuous running
-# - Simplified flash detection: 50s total wait (35s warmup + 15s buffer)
+# - Optimized flash detection: 40s total wait (35s warmup + 5s buffer)
 # - Only activates on >40% environmental changes using saved state comparison
 # - Burst mode execution: 8 minutes when changes detected
-# - Simple approach eliminates complex measurements and timing conflicts
+# - Precise timing eliminates complex measurements and timing conflicts
 # - Special deep night mode (2-5 AM) for uninterrupted work
 #
 # Schedule breakdown:
-# */30 * * * * - Simplified flash detection (50s) + burst mode (8min if needed)
+# */30 * * * * - Optimized flash detection (40s) + burst mode (8min if needed)
 # 0 */2 * * * - Health monitoring every 2 hours
 # 0 3 * * * - Daily cleanup at 3 AM (deep night)
 # 0 6 * * 1 - Weekly log maintenance on Monday 6 AM

@@ -47,9 +47,9 @@ is_controller_running() {
     return 1  # Not running
 }
 
-# Function to perform simplified flash detection for significant changes
+# Function to perform optimized flash detection for significant changes
 flash_detection_check() {
-    # Simple approach: 50-second wait (35s warmup + 15s buffer) then compare with saved state
+    # Optimized approach: 40-second wait (35s warmup + 5s buffer) then compare with saved state
     local temp_log="/tmp/flash_detection.log"
     
     # Get current saved state
@@ -61,11 +61,11 @@ flash_detection_check() {
         saved_volume=$(grep "volume=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 20)
     fi
     
-    log_message "Flash detection: Starting simplified 50-second detection (35s warmup + 15s buffer)"
+    log_message "Flash detection: Starting optimized 40-second detection (35s warmup + 5s buffer)"
     
-    # Simple environmental sampling with generous buffer
+    # Optimized environmental sampling with precise timing
     cd "$SCRIPT_DIR"
-    timeout 60s python3 -c "
+    timeout 45s python3 -c "
 import sys
 sys.path.append('$SCRIPT_DIR')
 import time
@@ -73,7 +73,7 @@ import cv2
 import numpy as np
 
 try:
-    print('flash_status:starting_simplified_detection')
+    print('flash_status:starting_optimized_detection')
     
     # Initialize camera
     cap = cv2.VideoCapture(0)
@@ -86,9 +86,9 @@ try:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
     
-    # Wait full 50 seconds (35s warmup + 15s buffer for slow systems)
-    print('flash_status:waiting_50_seconds_for_stability')
-    time.sleep(50)
+    # Wait optimized 40 seconds (35s warmup + 5s buffer for stability)
+    print('flash_status:waiting_40_seconds_for_stability')
+    time.sleep(40)
     
     # Take simple measurement after full wait
     print('flash_status:taking_final_measurement')
