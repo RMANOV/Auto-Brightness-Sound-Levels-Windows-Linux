@@ -8,7 +8,7 @@ SCRIPT_DIR="/home/rmanov/Auto-Brightness-Sound-Levels-Windows-Linux"
 MANAGER_SCRIPT="$SCRIPT_DIR/adaptive_controller_manager.sh"
 
 echo "🚀 Installing Adaptive Controller Cron Jobs..."
-echo "📊 Optimized 30-minute interval with flash detection for minimal system impact"
+echo "📊 Optimized 30-minute interval with flash detection and comprehensive resource cleanup"
 
 # Create temporary crontab file
 TEMP_CRONTAB=$(mktemp)
@@ -18,12 +18,14 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # Adaptive Brightness & Volume Controller - Intelligent Scheduling
 # Optimized for minimal system impact and user experience
 # 
-# Real-world optimized approach with enhanced flash detection:
+# Real-world optimized approach with enhanced flash detection and resource cleanup:
 # - 30-minute intervals: 81% energy savings vs continuous running
 # - Optimized flash detection: 40s total wait (35s warmup + 5s buffer)
 # - Only activates on >40% environmental changes using saved state comparison
-# - Burst mode execution: 8 minutes when changes detected
+# - Burst mode execution: 8 minutes when changes detected with comprehensive cleanup
 # - Precise timing eliminates complex measurements and timing conflicts
+# - Comprehensive resource cleanup eliminates browser lag and system performance issues
+# - Signal-aware termination with proper cleanup on timeout, interruption, or normal exit
 # - Special deep night mode (2-5 AM) for uninterrupted work
 #
 # Schedule breakdown:
@@ -78,6 +80,8 @@ echo "  🧠 Flash detection: Only activates on >40% environmental changes"
 echo "  💻 Eliminates taskbar icon flickering and fan activation"
 echo "  🌙 Special deep night mode (2-5 AM) for uninterrupted work"
 echo "  🔍 Smart threshold detection prevents unnecessary activations"
+echo "  🧹 Comprehensive resource cleanup eliminates browser lag"
+echo "  🛡️ Signal-aware termination with proper cleanup on any exit"
 echo "  📈 Professional logging with minimal system footprint"
 echo ""
 echo "📊 Real-World Optimization Results:"
@@ -86,6 +90,8 @@ echo "  ⏱️  Response time: Only when needed (>40% environmental change)"
 echo "  🖥️  UX Impact: Eliminated flickering and fan noise"
 echo "  🌙 Deep work: Uninterrupted 2-5 AM sessions"
 echo "  🚀 System load: Minimal - activation only on significant changes"
+echo "  🧹 Zero browser lag: Comprehensive resource cleanup after each run"
+echo "  🛡️ Robust termination: Clean exit on timeout, interrupt, or normal completion"
 echo ""
 echo "To view installed cron jobs:"
 echo "  crontab -l"
