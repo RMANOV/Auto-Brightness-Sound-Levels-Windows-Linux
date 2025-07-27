@@ -6,6 +6,9 @@ import os
 import time
 import platform
 import sys
+import signal
+import gc
+import atexit
 from threading import Thread, Event, Lock
 from queue import Queue, Empty
 from typing import Optional, Tuple, cast
@@ -34,6 +37,93 @@ def timeit(func_name):
             return result
         return wrapper
     return decorator
+
+# Global cleanup registry for tracking resources
+_cleanup_registry = []
+_controller_instance = None
+
+def register_cleanup(cleanup_func):
+    """Register a cleanup function to be called on exit"""
+    _cleanup_registry.append(cleanup_func)
+
+def comprehensive_cleanup():
+    """Comprehensive resource cleanup function"""
+    print("🧹 Performing comprehensive resource cleanup...")
+    
+    # 1. Stop controller if running
+    global _controller_instance
+    if _controller_instance:
+        try:
+            _controller_instance.stop_event.set()
+            if hasattr(_controller_instance, 'process_thread') and _controller_instance.process_thread:
+                if _controller_instance.process_thread.is_alive():
+                    _controller_instance.process_thread.join(timeout=2.0)
+        except Exception as e:
+            print(f"Warning: Controller cleanup issue: {e}")
+    
+    # 2. OpenCV cleanup
+    try:
+        cv2.destroyAllWindows()
+        # Force release any remaining camera resources
+        for i in range(10):  # Clean up potential camera handles
+            try:
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cap.release()
+            except:
+                break
+    except Exception as e:
+        print(f"Warning: OpenCV cleanup issue: {e}")
+    
+    # 3. Clear Numba JIT cache
+    try:
+        # Clear numba cache if available
+        import numba
+        if hasattr(numba, 'cuda'):
+            try:
+                numba.cuda.close()
+            except:
+                pass
+        # Clear CPU cache
+        if hasattr(numba, 'typed'):
+            numba.typed.List.empty_list.cache_clear()
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"Warning: Numba cleanup issue: {e}")
+    
+    # 4. Clear performance monitoring data
+    global perf_timers
+    perf_timers.clear()
+    
+    # 5. Run registered cleanup functions
+    for cleanup_func in _cleanup_registry:
+        try:
+            cleanup_func()
+        except Exception as e:
+            print(f"Warning: Cleanup function failed: {e}")
+    
+    # 6. Force garbage collection
+    for _ in range(3):  # Multiple GC passes for thorough cleanup
+        collected = gc.collect()
+        if collected == 0:
+            break
+    
+    print(f"✅ Cleanup completed - collected {gc.collect()} objects")
+
+# Setup signal handlers for proper cleanup
+def signal_handler(signum, frame):
+    """Signal handler for graceful shutdown"""
+    print(f"\n🛑 Received signal {signum}, initiating cleanup...")
+    comprehensive_cleanup()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+# Register cleanup function to run on normal exit
+atexit.register(comprehensive_cleanup)
 
 # Gracefully handle optional dependencies
 try:
@@ -191,6 +281,51 @@ class AdaptiveBrightnessVolumeController:
         # Threading and synchronization
         self.stop_event: Event = Event()
         self.lock: Lock = Lock()
+        self.process_thread: Optional[Thread] = None
+        self.frame_queue: Optional[Queue] = None
+        self.brightness_queue: Optional[Queue] = None
+        
+        # Register this instance globally for cleanup
+        global _controller_instance
+        _controller_instance = self
+        
+        # Register instance cleanup function
+        register_cleanup(self._instance_cleanup)
+    
+    def _instance_cleanup(self):
+        """Instance-specific cleanup method"""
+        try:
+            # Stop all threads
+            self.stop_event.set()
+            
+            # Join processing thread if it exists
+            if self.process_thread and self.process_thread.is_alive():
+                self.process_thread.join(timeout=2.0)
+                if self.process_thread.is_alive():
+                    print("Warning: Process thread did not terminate cleanly")
+            
+            # Clear queues
+            if self.frame_queue:
+                while not self.frame_queue.empty():
+                    try:
+                        self.frame_queue.get_nowait()
+                    except:
+                        break
+            
+            if self.brightness_queue:
+                while not self.brightness_queue.empty():
+                    try:
+                        self.brightness_queue.get_nowait()
+                    except:
+                        break
+            
+            # Release camera
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+                
+            print("✅ Instance cleanup completed")
+        except Exception as e:
+            print(f"Warning: Instance cleanup error: {e}")
 
         # Activity tracking
         self.last_activity_time: float = time.time()
@@ -853,14 +988,15 @@ class AdaptiveBrightnessVolumeController:
                 time.sleep(self.inactivity_check_interval)
 
     def run(self) -> None:
-        frame_queue: Queue[np.ndarray] = Queue(maxsize=10)
-        brightness_queue: Queue[float] = Queue(maxsize=10)
+        # Store queues as instance variables for cleanup
+        self.frame_queue = Queue(maxsize=10)
+        self.brightness_queue = Queue(maxsize=10)
 
         # Start frame processing thread if camera is available
         if self.cap and self.cap.isOpened():
-            process_thread = Thread(target=self.process_frames, args=(frame_queue, brightness_queue))
-            process_thread.daemon = True
-            process_thread.start()
+            self.process_thread = Thread(target=self.process_frames, args=(self.frame_queue, self.brightness_queue))
+            self.process_thread.daemon = True
+            self.process_thread.start()
 
         update_interval = 0.5
         last_brightness_change_time = time.time()
@@ -891,9 +1027,9 @@ class AdaptiveBrightnessVolumeController:
                     if self.cap and self.cap.isOpened():
                         ret, frame = self.cap.read()
                         if ret:
-                            frame_queue.put(frame)
+                            self.frame_queue.put(frame)
                             try:
-                                camera_brightness = brightness_queue.get(block=False)
+                                camera_brightness = self.brightness_queue.get(block=False)
                                 self.prev_camera_brightness = camera_brightness
                             except Empty:
                                 camera_brightness = self.prev_camera_brightness
