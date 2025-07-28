@@ -4,7 +4,7 @@
 # Optimized for 5-minute intervals based on mathematical analysis
 # Energy efficient for Fedora 42 laptop systems
 
-SCRIPT_DIR="/home/rmanov/Auto-Brightness-Sound-Levels-Windows-Linux"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANAGER_SCRIPT="$SCRIPT_DIR/adaptive_controller_manager.sh"
 
 echo "🚀 Installing Adaptive Controller Cron Jobs..."

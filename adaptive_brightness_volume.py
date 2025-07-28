@@ -810,7 +810,68 @@ class AdaptiveBrightnessVolumeController:
         print(f"Brightness: Target: {brightness:.1f}% → Setting: {calibrated_brightness}%")
         
         if self.brightness_method == "brightnessctl":
-            os.system(f"brightnessctl set {calibrated_brightness}%")
+            # Try different methods to ensure brightness works in all contexts (interactive vs cron)
+            success = False
+            
+            # Method 1: Try normal brightnessctl (works in interactive sessions)
+            result1 = os.system(f"brightnessctl set {calibrated_brightness}% >/dev/null 2>&1")
+            if result1 == 0:
+                success = True
+                print(f"DEBUG: Brightness set successfully using method 1 (normal brightnessctl)")
+            
+            # Method 2: Try with full path (helps with PATH issues in cron)
+            if not success:
+                result2 = os.system(f"/usr/bin/brightnessctl set {calibrated_brightness}% >/dev/null 2>&1")
+                if result2 == 0:
+                    success = True
+                    print(f"DEBUG: Brightness set successfully using method 2 (full path)")
+                
+            # Method 3: Try with sudo (for cron contexts without proper session)
+            if not success:
+                result3 = os.system(f"sudo -n /usr/bin/brightnessctl set {calibrated_brightness}% >/dev/null 2>&1")
+                if result3 == 0:
+                    success = True
+                    print(f"DEBUG: Brightness set successfully using method 3 (sudo)")
+                
+            # Method 4: Fall back to sysfs direct write
+            if not success:
+                try:
+                    backlight_dir = "/sys/class/backlight/intel_backlight"
+                    if os.path.exists(backlight_dir):
+                        with open(f"{backlight_dir}/max_brightness", "r") as f:
+                            max_brightness = int(f.read().strip())
+                        value = int((calibrated_brightness / 100) * max_brightness)
+                        
+                        # Try direct write first
+                        try:
+                            with open(f"{backlight_dir}/brightness", "w") as f:
+                                f.write(str(value))
+                            success = True
+                            print(f"DEBUG: Brightness set successfully using method 4a (direct sysfs)")
+                        except PermissionError:
+                            # Try with sudo
+                            result4 = os.system(f"echo {value} | sudo -n tee {backlight_dir}/brightness >/dev/null 2>&1")
+                            if result4 == 0:
+                                success = True
+                                print(f"DEBUG: Brightness set successfully using method 4b (sudo sysfs)")
+                except Exception as e:
+                    print(f"DEBUG: Sysfs fallback failed: {e}")
+            
+            if not success:
+                print(f"DEBUG: All brightness methods failed - results: method1={result1 if 'result1' in locals() else 'N/A'}, method2={result2 if 'result2' in locals() else 'N/A'}, method3={result3 if 'result3' in locals() else 'N/A'}, method4={'failed' if 'result4' in locals() else 'N/A'}")
+                print(f"Warning: Failed to set brightness using brightnessctl - all methods failed")
+                print()
+                print("🔧 BRIGHTNESS CONTROL SETUP NEEDED:")
+                print("To fix brightness control in cron context, run these commands:")
+                print()
+                print("sudo tee /etc/sudoers.d/brightness-control <<EOF")
+                print(f"{os.environ.get('USER', 'rmanov')} ALL=(ALL) NOPASSWD: /usr/bin/brightnessctl")
+                print(f"{os.environ.get('USER', 'rmanov')} ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/class/backlight/*/brightness")
+                print("EOF")
+                print()
+                print("sudo chmod 440 /etc/sudoers.d/brightness-control")
+                print()
+                print("This allows passwordless brightness control for cron jobs.")
             
         elif self.brightness_method == "xbacklight":
             os.system(f"xbacklight -set {calibrated_brightness}")

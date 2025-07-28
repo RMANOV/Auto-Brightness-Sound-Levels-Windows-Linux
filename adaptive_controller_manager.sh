@@ -5,7 +5,7 @@
 # Optimized for Fedora 42 laptop systems
 
 # Configuration
-SCRIPT_DIR="/home/rmanov/Auto-Brightness-Sound-Levels-Windows-Linux"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/adaptive_brightness_volume.py"
 LOCK_FILE="/tmp/adaptive_controller.lock"
 LOG_FILE="/tmp/adaptive_controller.log"
@@ -56,9 +56,10 @@ flash_detection_check() {
     local saved_brightness=30
     local saved_volume=20
     
-    if [[ -f "/home/rmanov/.config/adaptive-controller/last_state.txt" ]]; then
-        saved_brightness=$(grep "brightness=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 30)
-        saved_volume=$(grep "volume=" "/home/rmanov/.config/adaptive-controller/last_state.txt" | cut -d'=' -f2 2>/dev/null || echo 20)
+    local config_file="$HOME/.config/adaptive-controller/last_state.txt"
+    if [[ -f "$config_file" ]]; then
+        saved_brightness=$(grep "brightness=" "$config_file" | cut -d'=' -f2 2>/dev/null || echo 30)
+        saved_volume=$(grep "volume=" "$config_file" | cut -d'=' -f2 2>/dev/null || echo 20)
     fi
     
     log_message "Flash detection: Starting optimized 40-second detection (35s warmup + 5s buffer)"
