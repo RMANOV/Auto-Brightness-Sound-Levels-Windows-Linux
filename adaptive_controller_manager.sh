@@ -134,41 +134,63 @@ except Exception as e:
     return 1  # Default to skip if detection failed
 }
 
-# Function to determine if we should be active based on time
+# Function to determine if we should be active based on sunrise/sunset times
 should_be_active() {
-    # Special deep night work mode (2 AM - 5 AM) - minimal disruption
-    if [[ $CURRENT_HOUR -ge 2 && $CURRENT_HOUR -lt 5 ]]; then
-        log_message "Deep night work mode (2-5 AM) - minimal activity"
-        return 1  # Inactive during deep night work hours
-    fi
+    # First check if we're in a sunrise/sunset activation window
+    local sunrise_sunset_status
+    local window_type
     
-    # Extended night hours check for sleep (11 PM - 7 AM)
-    if [[ $CURRENT_HOUR -ge 23 || $CURRENT_HOUR -lt 7 ]]; then
-        # Flash detection during extended night hours
-        if ! flash_detection_check; then
-            return 1  # No significant changes during night
+    # Call the sunrise/sunset calculator
+    local calculator_output
+    calculator_output=$("$SCRIPT_DIR/sunrise_sunset_calculator.py" --check-active 2>/dev/null)
+    
+    if [[ $? -eq 0 && -n "$calculator_output" ]]; then
+        if [[ "$calculator_output" == "ACTIVE:"* ]]; then
+            window_type=$(echo "$calculator_output" | cut -d':' -f2)
+            log_message "Sunrise/sunset window: Currently in $window_type activation window"
+        else
+            log_message "Sunrise/sunset window: Outside activation windows - skipping"
+            return 1  # Outside sunrise/sunset activation windows
         fi
-        log_message "Night mode: Significant environmental change detected - activating"
+    else
+        # Fallback to original time-based logic if sunrise/sunset calculator fails
+        log_message "Sunrise/sunset calculator failed - using fallback time logic"
+        
+        # Special deep night work mode (2 AM - 5 AM) - minimal disruption
+        if [[ $CURRENT_HOUR -ge 2 && $CURRENT_HOUR -lt 5 ]]; then
+            log_message "Deep night work mode (2-5 AM) - minimal activity"
+            return 1  # Inactive during deep night work hours
+        fi
+        
+        # Extended night hours check for sleep (11 PM - 7 AM)
+        if [[ $CURRENT_HOUR -ge 23 || $CURRENT_HOUR -lt 7 ]]; then
+            log_message "Fallback night mode: Checking for environmental changes"
+        fi
     fi
     
     # Check if user session is active (for KDE Plasma)
     if ! loginctl show-session $(loginctl list-sessions | grep $(whoami) | awk '{print $1}') -p Active 2>/dev/null | grep -q "Active=yes"; then
+        log_message "User session not active - skipping"
         return 1  # No active user session
     fi
     
     # Check if display is on (prevent running on locked screen without display)
     if command -v xset >/dev/null 2>&1; then
         if xset q | grep "Monitor is Off" >/dev/null 2>&1; then
+            log_message "Display is off - skipping"
             return 1  # Display is off
         fi
     fi
     
-    # During normal hours, perform flash detection before activation
+    # Final check: Flash detection for significant environmental changes
+    # This is our intelligent filter to prevent unnecessary activations
     if ! flash_detection_check; then
+        log_message "Flash detection: No significant environmental changes detected"
         return 1  # No significant environmental changes detected
     fi
     
-    return 0  # Should be active - significant changes detected
+    log_message "All checks passed - controller should be active"
+    return 0  # Should be active - in sunrise/sunset window with significant changes
 }
 
 # Function to check system load and resources
