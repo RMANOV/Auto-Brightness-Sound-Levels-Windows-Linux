@@ -43,3 +43,10 @@ Thumbs.db
 # User-specific configuration
 config/
 local_config/
+*.conf
+*.local
+*_local.*
+
+# Personal files that may contain sensitive data
+location.conf
+adaptive-controller/
