@@ -285,6 +285,12 @@ class AdaptiveBrightnessVolumeController:
         self.frame_queue: Optional[Queue] = None
         self.brightness_queue: Optional[Queue] = None
         
+        # Activity tracking
+        self.last_activity_time: float = time.time()
+        self.is_active: bool = True
+        self.inactivity_threshold: int = 300  # seconds
+        self.inactivity_check_interval: float = 1.0  # seconds
+        
         # Register this instance globally for cleanup
         global _controller_instance
         _controller_instance = self
@@ -327,75 +333,6 @@ class AdaptiveBrightnessVolumeController:
         except Exception as e:
             print(f"Warning: Instance cleanup error: {e}")
 
-        # Activity tracking
-        self.last_activity_time: float = time.time()
-        self.is_active: bool = True
-        self.inactivity_threshold: int = 300  # seconds
-        self.inactivity_check_interval: float = 1.0  # seconds
-
-        # Smoothing parameters
-        self.brightness_smoothing_factor: float = 0.3
-        self.volume_smoothing_factor: float = 0.2
-        self.brightness_change_threshold: float = 5.0
-
-        # Screen content analysis
-        self.screen_check_interval: float = 2.0  # seconds (increased to reduce errors)
-        self.last_screen_check_time: float = 0.0
-        self.screen_brightness_factor: float = 1.0
-        self.screen_capture_error_count: int = 0
-        self.max_screen_errors: int = 5  # Show only first few errors
-        
-        # Initialize screen capture based on available method
-        self.sct = None
-        self.pil_available = SCREEN_CAPTURE_METHOD == "pillow"
-        self.gtk_available = SCREEN_CAPTURE_METHOD == "gtk"
-        self.xrandr_available = SCREEN_CAPTURE_METHOD == "xrandr-import"
-        self.screenshot_path = os.path.expanduser("~/.cache/adaptive-controller/screenshot.png")
-        
-        if SCREEN_CAPTURE_METHOD == "mss":
-            try:
-                self.sct = mss.mss()
-                print("Using MSS for screen content analysis")
-            except Exception as e:
-                print(f"Failed to initialize MSS: {e}")
-                SCREEN_CAPTURE_AVAILABLE = False
-
-        # Audio settings
-        self.audio_duration: float = 0.1  # seconds
-        self.audio_samplerate: int = 44100  # Hz
-        
-        # Noise level thresholds - adjusted for more comfortable volume range
-        # Typical ambient room noise is around 1e-4 to 5e-4
-        # Conversation/music might be around 1e-3 to 5e-3
-        # Loud environments can be above 1e-2
-        self.min_noise_level: float = 5e-6  # Very quiet environment
-        self.max_noise_level: float = 8e-3  # Fairly loud environment
-
-        # State variables
-        self.current_brightness: float = 30.0
-        self.smoothed_brightness: float = 30.0
-        self.prev_camera_brightness: Optional[float] = None
-        self.current_volume: float = 40.0
-        self.smoothed_volume: float = 40.0
-        
-        # Warmup parameters to avoid initial spike
-        self.warmup_frames: int = 20  # For brightness
-        self.current_warmup_frame: int = 0
-        self.warmup_cooldown: float = 0.05  # For brightness transitions (was 0.2)
-        self.is_in_warmup: bool = True
-        self.initial_brightness: Optional[float] = None
-        self.initial_volume: Optional[float] = None
-        
-        # Separate audio warmup parameters (more extreme to prevent audio shock)
-        self.audio_warmup_frames: int = 40  # Double the frames for audio warmup
-        self.audio_warmup_cooldown: float = 0.005  # 10x slower transitions than brightness
-        self.is_audio_in_warmup: bool = True  # Separate flag for audio warmup
-        self.audio_warmup_threshold: int = 10  # Additional grace period after main warmup
-        
-        # Real brightness calibration - used to track actual screen vs reported values
-        self.brightness_calibration_factor: float = 0.4  # Scale factor to match real values
-        self.last_significant_change_time: float = 0.0
-        self.sensitivity_to_changes: float = 1.5  # Increase sensitivity to light changes
 
     def setup_camera(self):
         """Initialize camera with fallback to other available cameras"""
@@ -460,6 +397,63 @@ class AdaptiveBrightnessVolumeController:
         return None, None
         
     def setup_state(self) -> None:
+        # Smoothing parameters
+        self.brightness_smoothing_factor: float = 0.3
+        self.volume_smoothing_factor: float = 0.2
+        self.brightness_change_threshold: float = 5.0
+
+        # Screen content analysis
+        self.screen_check_interval: float = 2.0  # seconds (increased to reduce errors)
+        self.last_screen_check_time: float = 0.0
+        self.screen_brightness_factor: float = 1.0
+        self.screen_capture_error_count: int = 0
+        self.max_screen_errors: int = 5  # Show only first few errors
+        
+        # Initialize screen capture based on available method
+        self.sct = None
+        self.pil_available = SCREEN_CAPTURE_METHOD == "pillow"
+        self.gtk_available = SCREEN_CAPTURE_METHOD == "gtk"
+        self.xrandr_available = SCREEN_CAPTURE_METHOD == "xrandr-import"
+        self.screenshot_path = os.path.expanduser("~/.cache/adaptive-controller/screenshot.png")
+        
+        if SCREEN_CAPTURE_METHOD == "mss":
+            try:
+                self.sct = mss.mss()
+                print("Using MSS for screen content analysis")
+            except Exception as e:
+                print(f"Failed to initialize MSS: {e}")
+                SCREEN_CAPTURE_AVAILABLE = False
+
+        # Audio settings
+        self.audio_duration: float = 0.1  # seconds
+        self.audio_samplerate: int = 44100  # Hz
+        
+        # Noise level thresholds - adjusted for more comfortable volume range
+        # Typical ambient room noise is around 1e-4 to 5e-4
+        # Conversation/music might be around 1e-3 to 5e-3
+        # Loud environments can be above 1e-2
+        self.min_noise_level: float = 5e-6  # Very quiet environment
+        self.max_noise_level: float = 8e-3  # Fairly loud environment
+
+        # Warmup parameters to avoid initial spike
+        self.warmup_frames: int = 20  # For brightness
+        self.current_warmup_frame: int = 0
+        self.warmup_cooldown: float = 0.05  # For brightness transitions (was 0.2)
+        self.is_in_warmup: bool = True
+        self.initial_brightness: Optional[float] = None
+        self.initial_volume: Optional[float] = None
+        
+        # Separate audio warmup parameters (more extreme to prevent audio shock)
+        self.audio_warmup_frames: int = 40  # Double the frames for audio warmup
+        self.audio_warmup_cooldown: float = 0.005  # 10x slower transitions than brightness
+        self.is_audio_in_warmup: bool = True  # Separate flag for audio warmup
+        self.audio_warmup_threshold: int = 10  # Additional grace period after main warmup
+        
+        # Real brightness calibration - used to track actual screen vs reported values
+        self.brightness_calibration_factor: float = 0.4  # Scale factor to match real values
+        self.last_significant_change_time: float = 0.0
+        self.sensitivity_to_changes: float = 1.5  # Increase sensitivity to light changes
+
         # Try to load saved settings
         saved_brightness, saved_volume = self.load_saved_state()
         
