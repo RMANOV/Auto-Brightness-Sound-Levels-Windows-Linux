@@ -508,8 +508,8 @@ class AdaptiveBrightnessVolumeController:
                                          min_brightness: float, 
                                          max_brightness: float) -> float:
         """JIT-compiled brightness mapping calculation with boost curve"""
-        # Base linear scaling formula: 0→5%, 100→29% (balanced)
-        base_linear = min_brightness + (camera_brightness * 0.24)
+        # Base linear scaling formula: 0→5%, 100→40% (brighter)
+        base_linear = min_brightness + (camera_brightness * 0.35)
         
         # Apply boost curve for middle values (35-55% camera brightness)
         boost_factor = 1.0
