@@ -34,7 +34,7 @@ tail -f /tmp/adaptive_controller.log
 
 **🌅 Sunrise/Sunset Optimization:** The system uses **intelligent sunrise/sunset scheduling with geographic awareness** for optimal energy efficiency:
 - **~90% energy savings** vs continuous running - only activates during light transition periods!
-- **Dynamic activation windows** - sunrise ±1.5h and sunset ±1.5h (automatically calculated for your location)
+- **Dynamic activation windows** - 30min before to 2h after each sunrise/sunset (automatically calculated for your location)
 - **Geographic intelligence** - auto-detects coordinates or uses manual configuration
 - **Seasonal adaptation** - windows automatically adjust as days get longer/shorter
 - **Optimized flash detection** - 40-second wait then compares with saved state (>40% change threshold)
@@ -90,7 +90,7 @@ Noise filtering and normalization
 - **Zero Resource Leaks**: Complete cleanup on any termination scenario (normal, timeout, interrupt)
 
 🌅 **Sunrise/Sunset Intelligent Scheduling System**:
-- **Geographic Time Windows**: Only activates during sunrise ±1.5h and sunset ±1.5h periods
+- **Geographic Time Windows**: Only activates during 30min before to 2h after sunrise/sunset periods
 - **~90% Energy Savings**: Dramatic improvement vs continuous running (up from 81%!)
 - **NOAA Astronomical Calculations**: Pure Python implementation for accurate sunrise/sunset times
 - **Location Auto-Detection**: Automatically detects coordinates from timezone or manual config

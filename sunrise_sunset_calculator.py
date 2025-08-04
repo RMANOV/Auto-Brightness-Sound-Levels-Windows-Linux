@@ -2,7 +2,7 @@
 """
 Sunrise/Sunset Calculator for Adaptive Controller
 Pure Python implementation based on NOAA algorithms
-Provides ±1.5 hour time windows around sunrise and sunset for intelligent scheduling
+Provides optimized time windows (30min before, 2h after) around sunrise and sunset for intelligent scheduling
 """
 
 import math
@@ -253,7 +253,7 @@ class SunCalculator:
     
     def get_activation_windows(self, date=None):
         """
-        Get sunrise and sunset activation windows (±1.5 hours)
+        Get sunrise and sunset activation windows (30 min before, 2 hours after)
         
         Args:
             date: datetime.date object (defaults to today)
@@ -271,10 +271,10 @@ class SunCalculator:
             return dt.time()
         
         return {
-            'sunrise_start': add_hours_to_time(sun_times['sunrise'], -1.5),
-            'sunrise_end': add_hours_to_time(sun_times['sunrise'], 1.5),
-            'sunset_start': add_hours_to_time(sun_times['sunset'], -1.5),
-            'sunset_end': add_hours_to_time(sun_times['sunset'], 1.5)
+            'sunrise_start': add_hours_to_time(sun_times['sunrise'], -0.5),
+            'sunrise_end': add_hours_to_time(sun_times['sunrise'], 2.0),
+            'sunset_start': add_hours_to_time(sun_times['sunset'], -0.5),
+            'sunset_end': add_hours_to_time(sun_times['sunset'], 2.0)
         }
     
     def is_in_active_window(self, current_time=None):
@@ -365,7 +365,7 @@ def main():
             print(f"  Solar Noon: {times['solar_noon']}")
             print(f"  Sunset: {times['sunset']}")
             print()
-            print(f"Activation Windows (±1.5h):")
+            print(f"Activation Windows (30min before, 2h after):")
             print(f"  Morning: {windows['sunrise_start']} - {windows['sunrise_end']}")
             print(f"  Evening: {windows['sunset_start']} - {windows['sunset_end']}")
             print()

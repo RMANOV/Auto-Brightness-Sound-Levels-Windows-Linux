@@ -19,7 +19,7 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # Optimized for minimal system impact and optimal user experience
 # 
 # New sunrise/sunset approach with dynamic time windows and flash detection:
-# - ONLY activates during sunrise/sunset periods (±1.5 hours around each event)
+# - ONLY activates during sunrise/sunset periods (30min before, 2h after each event)
 # - 30-minute intervals: ~90% energy savings vs continuous running
 # - Dynamic time windows: Automatically adjusts with seasonal changes
 # - Optimized flash detection: 40s total wait (35s warmup + 5s buffer)
@@ -31,7 +31,7 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # - Fallback protection: Reverts to time-based logic if sunrise/sunset calculation fails
 #
 # Schedule breakdown:
-# */30 * * * * - Check if in sunrise/sunset window + flash detection + burst mode (8min if needed)
+# */30 * * * * - Check if in sunrise/sunset window (30min before, 2h after) + flash detection + burst mode (8min if needed)
 # 0 */2 * * * - Health monitoring every 2 hours
 # 0 3 * * * - Daily cleanup at 3 AM (between sunrise/sunset windows)
 # 0 6 * * 1 - Weekly log maintenance on Monday 6 AM
@@ -77,7 +77,7 @@ echo "  🧹 Daily cleanup:   3:00 AM (deep night mode)"
 echo "  📝 Log maintenance: Monday 6:00 AM"
 echo ""
 echo "🎯 Key Features:"
-echo "  🌅 Sunrise/sunset activation: Only runs during optimal light transition periods"
+echo "  🌅 Sunrise/sunset activation: 30min before to 2h after each event"
 echo "  ⚡ ~90% energy savings vs continuous running (even better than before!)"
 echo "  🧠 Flash detection: Only activates on >40% environmental changes"
 echo "  🗺️  Geographic accuracy: Calculates exact sunrise/sunset times for your location"
@@ -91,10 +91,10 @@ echo "  📈 Professional logging with minimal system footprint"
 echo ""
 echo "📊 Real-World Optimization Results:"
 echo "  🔋 Energy savings: ~90% vs continuous running (sunrise/sunset windows only!)"
-echo "  ⏱️  Response time: Only during light transition periods with >40% changes"
+echo "  ⏱️  Response time: Only during 30min-2h light transition periods with >40% changes"
 echo "  🖥️  UX Impact: Eliminated flickering and fan noise"
 echo "  🌅 Intelligent timing: Perfect synchronization with natural light cycles"
-echo "  🚀 System load: Minimal - activation only during sunrise/sunset windows"
+echo "  🚀 System load: Minimal - activation only during optimized sunrise/sunset windows"
 echo "  🧹 Zero browser lag: Comprehensive resource cleanup after each run"
 echo "  🛡️ Robust termination: Clean exit on timeout, interrupt, or normal completion"
 echo "  🗺️  Location aware: Automatically detects or estimates your geographic coordinates"
