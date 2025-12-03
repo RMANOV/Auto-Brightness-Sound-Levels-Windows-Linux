@@ -579,61 +579,71 @@ class GalaxyMandala:
 
 
 # =============================================================================
-# VISUALIZATION 9: Metatron's Cube
+# VISUALIZATION 9: Kaleidoscope Mandala
 # =============================================================================
-class MetatronsCube:
-    """Metatron's Cube sacred geometry"""
-    name = "Metatron's Cube"
-    num_lines = 200
+class KaleidoscopeMandala:
+    """Dynamic kaleidoscope with mirrored segments"""
+    name = "Kaleidoscope"
+    num_lines = 300
 
     def __init__(self):
         self.t = 0.0
         self.hue_offset = 0.0
-        self.rot = 0.0
+        self.n_mirrors = random.choice([6, 8, 10, 12])
+        self.shapes = []
+        for _ in range(15):
+            self.shapes.append({
+                'r': random.random() * 0.7 + 0.1,
+                'a': random.random() * math.pi * 2,
+                'dr': (random.random() - 0.5) * 0.003,
+                'da': (random.random() - 0.5) * 0.02,
+                'size': random.random() * 0.08 + 0.03,
+                'sides': random.choice([3, 4, 5, 6])
+            })
 
     def update(self):
-        self.t += 0.006
-        self.rot += 0.004
-        self.hue_offset += 0.003
+        self.t += 0.008
+        self.hue_offset += 0.004
+        for s in self.shapes:
+            s['r'] += s['dr']
+            s['a'] += s['da']
+            if s['r'] < 0.1 or s['r'] > 0.8:
+                s['dr'] *= -1
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            max_r = min(width, height) * 0.4
+            max_r = min(width, height) * 0.42
             edges = []
 
-            # 13 circles of Fruit of Life positions
-            positions = [(0, 0)]  # Center
-            for ring in range(2):
-                r = max_r * (0.33 + ring * 0.33)
-                n = 6
-                for i in range(n):
-                    a = self.rot + i * 2 * math.pi / n + ring * math.pi / 6
-                    positions.append((r * math.cos(a), r * math.sin(a)))
+            for si, shape in enumerate(self.shapes):
+                hue_base = (si / len(self.shapes) + self.hue_offset) % 1.0
+                # Draw shape in each mirror segment
+                for m in range(self.n_mirrors):
+                    mirror_a = m * 2 * math.pi / self.n_mirrors
+                    # Shape position
+                    sr = shape['r'] * max_r
+                    sa = shape['a'] + mirror_a
+                    scx = cx + sr * math.cos(sa)
+                    scy = cy + sr * math.sin(sa)
+                    # Draw polygon
+                    sz = shape['size'] * max_r
+                    pts = []
+                    for i in range(shape['sides']):
+                        pa = self.t + i * 2 * math.pi / shape['sides'] + mirror_a
+                        pts.append((scx + sz * math.cos(pa), scy + sz * math.sin(pa)))
+                    for i in range(shape['sides']):
+                        hue = (hue_base + m * 0.02) % 1.0
+                        edges.append((pts[i][0], pts[i][1], pts[(i+1) % shape['sides']][0], pts[(i+1) % shape['sides']][1],
+                                     hsv_to_hex(hue, 0.8, 0.7), 2))
 
-            # Draw circles
-            circle_r = max_r * 0.12
-            for pi, (px, py) in enumerate(positions):
-                hue = (pi / len(positions) + self.hue_offset) % 1.0
-                n_seg = 16
-                for i in range(n_seg):
-                    a1 = i * 2 * math.pi / n_seg
-                    a2 = (i + 1) * 2 * math.pi / n_seg
-                    x1 = cx + px + circle_r * math.cos(a1)
-                    y1 = cy + py + circle_r * math.sin(a1)
-                    x2 = cx + px + circle_r * math.cos(a2)
-                    y2 = cy + py + circle_r * math.sin(a2)
-                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.6, 0.5), 1))
-
-            # Connect all points (Metatron's lines)
-            for i in range(len(positions)):
-                for j in range(i + 1, len(positions)):
-                    x1, y1 = cx + positions[i][0], cy + positions[i][1]
-                    x2, y2 = cx + positions[j][0], cy + positions[j][1]
-                    dist = math.hypot(positions[j][0] - positions[i][0], positions[j][1] - positions[i][1])
-                    hue = ((i + j) / 26 + self.hue_offset) % 1.0
-                    alpha = max(0.3, 1 - dist / (max_r * 1.5))
-                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, alpha * 0.7), 1))
+            # Mirror lines from center
+            for m in range(self.n_mirrors):
+                a = m * 2 * math.pi / self.n_mirrors + self.t * 0.1
+                x2 = cx + max_r * 0.95 * math.cos(a)
+                y2 = cy + max_r * 0.95 * math.sin(a)
+                hue = (m / self.n_mirrors + self.hue_offset) % 1.0
+                edges.append((cx, cy, x2, y2, hsv_to_hex(hue, 0.4, 0.3), 1))
 
             return edges
         except Exception:
@@ -641,64 +651,87 @@ class MetatronsCube:
 
 
 # =============================================================================
-# VISUALIZATION 10: Toroidal Knot
+# VISUALIZATION 10: Stellated Dodecahedron (Great Stellated)
 # =============================================================================
-class ToroidalKnot:
-    """3D Torus knot visualization"""
-    name = "Toroidal Knot"
-    num_lines = 500
+class StellatedDodecahedron:
+    """3D Great Stellated Dodecahedron"""
+    name = "Stellated Dodecahedron"
+    num_lines = 90
 
     def __init__(self):
-        self.t = 0.0
+        self.angle_x = self.angle_y = self.angle_z = 0.0
         self.hue_offset = 0.0
-        self.p = random.choice([2, 3, 5])  # Winds around torus
-        self.q = random.choice([3, 5, 7])  # Winds through hole
-        self.angle_x = self.angle_y = 0.0
-        self.points = []
+        phi = (1 + math.sqrt(5)) / 2
+        # Icosahedron vertices (dual of dodecahedron)
+        self.verts = []
+        for s1 in [-1, 1]:
+            for s2 in [-1, 1]:
+                self.verts.append((0, s1, s2 * phi))
+                self.verts.append((s1, s2 * phi, 0))
+                self.verts.append((s2 * phi, 0, s1))
+        # Stellate by extending vertices
+        self.stell_factor = phi * phi
+        self.spike_verts = [(v[0] * self.stell_factor, v[1] * self.stell_factor, v[2] * self.stell_factor) for v in self.verts]
+        # Edges: connect spikes to neighbors
+        self.edges_idx = []
+        for i in range(12):
+            for j in range(i + 1, 12):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(3))
+                if d < 5:  # Adjacent vertices
+                    self.edges_idx.append((i, j))
 
     def update(self):
-        self.t += 0.02
-        self.angle_x += 0.005
-        self.angle_y += 0.007
+        self.angle_x += 0.006
+        self.angle_y += 0.008
+        self.angle_z += 0.004
         self.hue_offset += 0.004
 
-        # Generate new point
-        R, r = 1.0, 0.4
-        phi = self.t
-        x = (R + r * math.cos(self.q * phi)) * math.cos(self.p * phi)
-        y = (R + r * math.cos(self.q * phi)) * math.sin(self.p * phi)
-        z = r * math.sin(self.q * phi)
-        self.points.append((x, y, z))
-        if len(self.points) > 450:
-            self.points = self.points[-450:]
+    def _rotate(self, v):
+        x, y, z = v
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            size = min(width, height) * 0.22
+            size = min(width, height) * 0.08
             edges = []
-            cosa, sina = math.cos(self.angle_x), math.sin(self.angle_x)
-            cosb, sinb = math.cos(self.angle_y), math.sin(self.angle_y)
 
-            for i in range(1, len(self.points)):
-                x1, y1, z1 = self.points[i - 1]
-                x2, y2, z2 = self.points[i]
+            # Project spike vertices
+            proj_spikes = []
+            for v in self.spike_verts:
+                x, y, z = self._rotate(v)
+                d = 6.0
+                s = d / (d - z)
+                proj_spikes.append((cx + x * s * size, cy - y * s * size, z, s))
 
-                # Rotate
-                y1, z1 = y1 * cosa - z1 * sina, y1 * sina + z1 * cosa
-                y2, z2 = y2 * cosa - z2 * sina, y2 * sina + z2 * cosa
-                x1, z1 = x1 * cosb - z1 * sinb, x1 * sinb + z1 * cosb
-                x2, z2 = x2 * cosb - z2 * sinb, x2 * sinb + z2 * cosb
+            # Project base vertices
+            proj_base = []
+            for v in self.verts:
+                x, y, z = self._rotate(v)
+                d = 6.0
+                s = d / (d - z)
+                proj_base.append((cx + x * s * size, cy - y * s * size, z, s))
 
-                # Project
-                d = 4.0
-                s1, s2 = d / (d - z1), d / (d - z2)
-                px1, py1 = cx + x1 * s1 * size, cy - y1 * s1 * size
-                px2, py2 = cx + x2 * s2 * size, cy - y2 * s2 * size
+            # Draw spike edges
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, z1, s1 = proj_spikes[i]
+                x2, y2, z2, s2 = proj_spikes[j]
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                lw = max(2, int(3 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.7), lw))
 
-                t = i / len(self.points)
-                hue = (t + self.hue_offset) % 1.0
-                edges.append((px1, py1, px2, py2, hsv_to_hex(hue, 0.85, 0.4 + t * 0.55), 3))
+            # Draw connections from base to spikes
+            for i in range(12):
+                x1, y1, _, s1 = proj_base[i]
+                x2, y2, _, s2 = proj_spikes[i]
+                hue = (i / 12 + self.hue_offset + 0.5) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, 0.55), 2))
 
             return edges
         except Exception:
@@ -801,7 +834,7 @@ class Screensaver:
     VISUALIZATIONS = [
         Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
         RotatingDodecahedron, SriYantra, Merkaba, GalaxyMandala,
-        MetatronsCube, ToroidalKnot, HarmonicRose
+        KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose
     ]
 
     def __init__(self):
