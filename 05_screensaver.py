@@ -521,57 +521,97 @@ class Merkaba:
 
 
 # =============================================================================
-# VISUALIZATION 8: Spiral Galaxy Mandala
+# VISUALIZATION 8: 4D 24-Cell (Icositetrachoron)
 # =============================================================================
-class GalaxyMandala:
-    """Spiral arms forming a galaxy-like mandala"""
-    name = "Galaxy Mandala"
-    num_lines = 400
+class Cell24:
+    """4D polytope with 24 octahedral cells - one of the most beautiful 4D shapes"""
+    name = "4D 24-Cell"
+    num_lines = 96
 
     def __init__(self):
-        self.t = 0.0
+        self.angle_xy = self.angle_xz = self.angle_xw = 0.0
+        self.angle_yz = self.angle_yw = self.angle_zw = 0.0
         self.hue_offset = 0.0
-        self.n_arms = random.choice([2, 3, 4, 5])
-        self.points_per_arm = 80
+        # 24 vertices: 8 from permutations of (±1,0,0,0) + 16 from (±½,±½,±½,±½)
+        self.verts = []
+        # Type A: permutations of (±1, 0, 0, 0)
+        for i in range(4):
+            for s in [-1, 1]:
+                v = [0, 0, 0, 0]
+                v[i] = s
+                self.verts.append(tuple(v))
+        # Type B: (±½, ±½, ±½, ±½)
+        for s1 in [-0.5, 0.5]:
+            for s2 in [-0.5, 0.5]:
+                for s3 in [-0.5, 0.5]:
+                    for s4 in [-0.5, 0.5]:
+                        self.verts.append((s1, s2, s3, s4))
+        # Edges: connect vertices at distance 1
+        self.edges_idx = []
+        for i in range(24):
+            for j in range(i + 1, 24):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                if abs(d - 1.0) < 0.01:
+                    self.edges_idx.append((i, j))
 
     def update(self):
-        self.t += 0.008
-        self.hue_offset += 0.003
+        self.angle_xy += 0.007
+        self.angle_xz += 0.005
+        self.angle_xw += 0.009
+        self.angle_yz += 0.004
+        self.angle_yw += 0.006
+        self.angle_zw += 0.008
+        self.hue_offset += 0.004
+
+    def _rotate4d(self, v):
+        x, y, z, w = v
+        # XY rotation
+        c, s = math.cos(self.angle_xy), math.sin(self.angle_xy)
+        x, y = x * c - y * s, x * s + y * c
+        # XZ rotation
+        c, s = math.cos(self.angle_xz), math.sin(self.angle_xz)
+        x, z = x * c - z * s, x * s + z * c
+        # XW rotation
+        c, s = math.cos(self.angle_xw), math.sin(self.angle_xw)
+        x, w = x * c - w * s, x * s + w * c
+        # YZ rotation
+        c, s = math.cos(self.angle_yz), math.sin(self.angle_yz)
+        y, z = y * c - z * s, y * s + z * c
+        # YW rotation
+        c, s = math.cos(self.angle_yw), math.sin(self.angle_yw)
+        y, w = y * c - w * s, y * s + w * c
+        # ZW rotation
+        c, s = math.cos(self.angle_zw), math.sin(self.angle_zw)
+        z, w = z * c - w * s, z * s + w * c
+        return x, y, z, w
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            max_r = min(width, height) * 0.42
+            size = min(width, height) * 0.18
             edges = []
 
-            for arm in range(self.n_arms):
-                arm_offset = arm * 2 * math.pi / self.n_arms
-                pts = []
-                for i in range(self.points_per_arm):
-                    t = i / self.points_per_arm
-                    r = t * max_r
-                    # Logarithmic spiral with rotation
-                    a = arm_offset + t * 4 * math.pi + self.t
-                    x = cx + r * math.cos(a)
-                    y = cy + r * math.sin(a)
-                    pts.append((x, y))
+            projected = []
+            for v in self.verts:
+                x, y, z, w = self._rotate4d(v)
+                # 4D to 3D perspective
+                d4 = 2.5
+                s4 = d4 / (d4 - w)
+                x3, y3, z3 = x * s4, y * s4, z * s4
+                # 3D to 2D perspective
+                d3 = 4.0
+                s3 = d3 / (d3 - z3)
+                px = cx + x3 * s3 * size
+                py = cy - y3 * s3 * size
+                projected.append((px, py, w, s4 * s3))
 
-                hue_base = (arm / self.n_arms + self.hue_offset) % 1.0
-                for i in range(1, len(pts)):
-                    t = i / len(pts)
-                    hue = (hue_base + t * 0.3) % 1.0
-                    edges.append((pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1],
-                                 hsv_to_hex(hue, 0.7, 0.4 + t * 0.5), 2))
-
-            # Central bulge
-            n_center = 20
-            for i in range(n_center):
-                a1 = self.t * 2 + i * 2 * math.pi / n_center
-                a2 = self.t * 2 + (i + 1) * 2 * math.pi / n_center
-                r = max_r * 0.08
-                x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
-                x2, y2 = cx + r * math.cos(a2), cy + r * math.sin(a2)
-                edges.append((x1, y1, x2, y2, hsv_to_hex((self.hue_offset + 0.5) % 1, 0.8, 0.9), 2))
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, w1, s1 = projected[i]
+                x2, y2, w2, s2 = projected[j]
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                depth = (w1 + w2 + 2) / 4
+                lw = max(1, int(3 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, 0.4 + depth * 0.5), lw))
 
             return edges
         except Exception:
@@ -796,6 +836,157 @@ class HarmonicRose:
 
 
 # =============================================================================
+# VISUALIZATION 12: Fibonacci Spiral Mandala
+# =============================================================================
+class FibonacciSpiral:
+    """Golden ratio spirals forming a sacred geometry mandala"""
+    name = "Fibonacci Spiral"
+    num_lines = 350
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.phi = (1 + math.sqrt(5)) / 2  # Golden ratio
+        self.golden_angle = 2 * math.pi / (self.phi * self.phi)
+        self.n_points = 200
+        self.rot = 0.0
+
+    def update(self):
+        self.t += 0.006
+        self.rot += 0.004
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.42
+            edges = []
+            pulse = 1 + 0.08 * math.sin(self.t * 0.4)
+
+            # Generate Fibonacci spiral points
+            points = []
+            for i in range(self.n_points):
+                # Fermat's spiral with golden angle
+                r = math.sqrt(i / self.n_points) * max_r * pulse
+                a = i * self.golden_angle + self.rot
+                x = cx + r * math.cos(a)
+                y = cy + r * math.sin(a)
+                points.append((x, y, r))
+
+            # Connect sequential points
+            for i in range(1, len(points)):
+                x1, y1, r1 = points[i - 1]
+                x2, y2, r2 = points[i]
+                t = i / len(points)
+                hue = (t + self.hue_offset) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.5 + t * 0.4), 2))
+
+            # Connect points in Fibonacci pattern (every phi-th point)
+            fib = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+            for f in fib:
+                if f < len(points):
+                    for i in range(f, len(points)):
+                        x1, y1, _ = points[i]
+                        x2, y2, _ = points[i - f]
+                        t = i / len(points)
+                        hue = (t + self.hue_offset + 0.3) % 1.0
+                        edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.6, 0.35), 1))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 13: Quantum Interference Mandala
+# =============================================================================
+class QuantumInterference:
+    """Wave interference patterns from multiple sources"""
+    name = "Quantum Interference"
+    num_lines = 400
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_sources = random.choice([5, 6, 7, 8])
+        self.wave_count = 8
+
+    def update(self):
+        self.t += 0.012
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.42
+            edges = []
+
+            # Source positions in a circle
+            source_r = max_r * 0.7
+            sources = []
+            for i in range(self.n_sources):
+                a = i * 2 * math.pi / self.n_sources + self.t * 0.1
+                sx = cx + source_r * math.cos(a)
+                sy = cy + source_r * math.sin(a)
+                sources.append((sx, sy))
+
+            # Draw concentric waves from each source
+            for si, (sx, sy) in enumerate(sources):
+                hue_base = (si / self.n_sources + self.hue_offset) % 1.0
+                for w in range(self.wave_count):
+                    # Wave radius expands over time
+                    wave_r = ((self.t * 30 + w * 25) % (max_r * 0.6)) + 5
+                    n_seg = 24
+                    for j in range(n_seg):
+                        a1 = j * 2 * math.pi / n_seg
+                        a2 = (j + 1) * 2 * math.pi / n_seg
+                        x1 = sx + wave_r * math.cos(a1)
+                        y1 = sy + wave_r * math.sin(a1)
+                        x2 = sx + wave_r * math.cos(a2)
+                        y2 = sy + wave_r * math.sin(a2)
+                        # Fade based on wave age
+                        fade = 1 - (wave_r / (max_r * 0.6))
+                        hue = (hue_base + w * 0.05) % 1.0
+                        edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, fade * 0.6), 1))
+
+            # Interference lines between sources
+            for i in range(self.n_sources):
+                j = (i + 1) % self.n_sources
+                x1, y1 = sources[i]
+                x2, y2 = sources[j]
+                # Draw interference pattern along the line
+                n_int = 15
+                for k in range(n_int):
+                    t = k / n_int
+                    mx = x1 + (x2 - x1) * t
+                    my = y1 + (y2 - y1) * t
+                    # Perpendicular oscillation
+                    perp_a = math.atan2(y2 - y1, x2 - x1) + math.pi / 2
+                    amp = 20 * math.sin(self.t * 3 + k * 0.8 + i * 1.5)
+                    px = mx + amp * math.cos(perp_a)
+                    py = my + amp * math.sin(perp_a)
+                    if k > 0:
+                        hue = (i / self.n_sources + k / n_int * 0.2 + self.hue_offset) % 1.0
+                        edges.append((prev_px, prev_py, px, py, hsv_to_hex(hue, 0.85, 0.7), 2))
+                    prev_px, prev_py = px, py
+
+            # Central interference node
+            n_center = 16
+            center_r = max_r * 0.1
+            for i in range(n_center):
+                a1 = self.t * 2 + i * 2 * math.pi / n_center
+                a2 = self.t * 2 + (i + 1) * 2 * math.pi / n_center
+                r = center_r * (1 + 0.3 * math.sin(self.t * 4 + i))
+                x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
+                x2, y2 = cx + r * math.cos(a2), cy + r * math.sin(a2)
+                edges.append((x1, y1, x2, y2, hsv_to_hex((self.hue_offset + 0.5) % 1, 0.9, 0.85), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
 # STAR FIELD (Background)
 # =============================================================================
 class StarField:
@@ -829,12 +1020,13 @@ class StarField:
 # MAIN SCREENSAVER
 # =============================================================================
 class Screensaver:
-    """Multi-visualization screensaver - 11 Mandalas & 3D shapes"""
+    """Multi-visualization screensaver - 13 Mandalas & 3D shapes"""
 
     VISUALIZATIONS = [
         Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
-        RotatingDodecahedron, SriYantra, Merkaba, GalaxyMandala,
-        KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose
+        RotatingDodecahedron, SriYantra, Merkaba, Cell24,
+        KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
+        FibonacciSpiral, QuantumInterference
     ]
 
     def __init__(self):
