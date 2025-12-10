@@ -836,61 +836,189 @@ class HarmonicRose:
 
 
 # =============================================================================
-# VISUALIZATION 12: Fibonacci Spiral Mandala
+# VISUALIZATION 12: 4D 120-Cell (Hyperdodecahedron) - Partial
 # =============================================================================
-class FibonacciSpiral:
-    """Golden ratio spirals forming a sacred geometry mandala"""
-    name = "Fibonacci Spiral"
-    num_lines = 350
+class Hyperdodecahedron:
+    """Partial 4D 120-Cell - the most complex regular 4D polytope"""
+    name = "4D Hyperdodecahedron"
+    num_lines = 150
 
     def __init__(self):
-        self.t = 0.0
+        self.angle_xw = self.angle_yw = self.angle_zw = 0.0
+        self.angle_xy = self.angle_xz = self.angle_yz = 0.0
         self.hue_offset = 0.0
-        self.phi = (1 + math.sqrt(5)) / 2  # Golden ratio
-        self.golden_angle = 2 * math.pi / (self.phi * self.phi)
-        self.n_points = 200
-        self.rot = 0.0
+        phi = (1 + math.sqrt(5)) / 2
+        ip = 1 / phi
+        p2 = phi * phi
+        # Subset of 120-cell vertices (using key symmetry points)
+        self.verts = []
+        # Permutations of (±2, ±2, 0, 0)
+        for p in [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]:
+            for s1 in [-1, 1]:
+                for s2 in [-1, 1]:
+                    v = [0, 0, 0, 0]
+                    v[p[0]], v[p[1]] = s1 * 2, s2 * 2
+                    self.verts.append(tuple(v))
+        # Permutations of (±φ², ±1, ±φ⁻², 0)
+        for i in range(4):
+            for s1 in [-1, 1]:
+                for s2 in [-1, 1]:
+                    for s3 in [-1, 1]:
+                        v = [s1 * p2, s2 * 1, s3 * ip * ip, 0]
+                        v = v[-i:] + v[:-i]  # Rotate
+                        if tuple(v) not in self.verts:
+                            self.verts.append(tuple(v))
+        self.verts = self.verts[:40]  # Limit for performance
+        # Build edges
+        self.edges_idx = []
+        for i in range(len(self.verts)):
+            for j in range(i + 1, len(self.verts)):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                if 3.5 < d < 4.5:  # Edge length ~2
+                    self.edges_idx.append((i, j))
 
     def update(self):
-        self.t += 0.006
-        self.rot += 0.004
-        self.hue_offset += 0.003
+        self.angle_xw += 0.006
+        self.angle_yw += 0.008
+        self.angle_zw += 0.005
+        self.angle_xy += 0.004
+        self.angle_xz += 0.003
+        self.angle_yz += 0.007
+        self.hue_offset += 0.004
+
+    def _rotate4d(self, v):
+        x, y, z, w = v
+        for angle, (a, b) in [(self.angle_xy, (0,1)), (self.angle_xz, (0,2)),
+                               (self.angle_xw, (0,3)), (self.angle_yz, (1,2)),
+                               (self.angle_yw, (1,3)), (self.angle_zw, (2,3))]:
+            c, s = math.cos(angle), math.sin(angle)
+            coords = [x, y, z, w]
+            coords[a], coords[b] = coords[a]*c - coords[b]*s, coords[a]*s + coords[b]*c
+            x, y, z, w = coords
+        return x, y, z, w
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            max_r = min(width, height) * 0.42
+            size = min(width, height) * 0.07
             edges = []
-            pulse = 1 + 0.08 * math.sin(self.t * 0.4)
+            projected = []
+            for v in self.verts:
+                x, y, z, w = self._rotate4d(v)
+                d4 = 5.0
+                s4 = d4 / (d4 - w)
+                x3, y3, z3 = x * s4, y * s4, z * s4
+                d3 = 6.0
+                s3 = d3 / (d3 - z3)
+                projected.append((cx + x3*s3*size, cy - y3*s3*size, w, s4*s3))
 
-            # Generate Fibonacci spiral points
-            points = []
-            for i in range(self.n_points):
-                # Fermat's spiral with golden angle
-                r = math.sqrt(i / self.n_points) * max_r * pulse
-                a = i * self.golden_angle + self.rot
-                x = cx + r * math.cos(a)
-                y = cy + r * math.sin(a)
-                points.append((x, y, r))
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, w1, s1 = projected[i]
+                x2, y2, w2, s2 = projected[j]
+                hue = (idx / max(1, len(self.edges_idx)) + self.hue_offset) % 1.0
+                depth = (w1 + w2 + 6) / 12
+                lw = max(1, int(2.5 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.35 + depth * 0.55), lw))
+            return edges
+        except Exception:
+            return []
 
-            # Connect sequential points
-            for i in range(1, len(points)):
-                x1, y1, r1 = points[i - 1]
-                x2, y2, r2 = points[i]
-                t = i / len(points)
-                hue = (t + self.hue_offset) % 1.0
-                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.5 + t * 0.4), 2))
 
-            # Connect points in Fibonacci pattern (every phi-th point)
-            fib = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
-            for f in fib:
-                if f < len(points):
-                    for i in range(f, len(points)):
-                        x1, y1, _ = points[i]
-                        x2, y2, _ = points[i - f]
-                        t = i / len(points)
-                        hue = (t + self.hue_offset + 0.3) % 1.0
-                        edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.6, 0.35), 1))
+# =============================================================================
+# VISUALIZATION 13: Cosmic Web (3D Neural Network)
+# =============================================================================
+class CosmicWeb:
+    """3D network of interconnected nodes forming a cosmic web structure"""
+    name = "Cosmic Web"
+    num_lines = 400
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        # Generate random 3D nodes
+        self.n_nodes = 35
+        self.nodes = []
+        for _ in range(self.n_nodes):
+            self.nodes.append({
+                'x': (random.random() - 0.5) * 2,
+                'y': (random.random() - 0.5) * 2,
+                'z': (random.random() - 0.5) * 2,
+                'vx': (random.random() - 0.5) * 0.002,
+                'vy': (random.random() - 0.5) * 0.002,
+                'vz': (random.random() - 0.5) * 0.002,
+                'pulse': random.random() * math.pi * 2
+            })
+        # Build edges - connect nearby nodes
+        self.edges_idx = []
+        for i in range(self.n_nodes):
+            for j in range(i + 1, self.n_nodes):
+                d = sum((self.nodes[i][k] - self.nodes[j][k])**2 for k in ['x', 'y', 'z'])
+                if d < 0.8:
+                    self.edges_idx.append((i, j))
+
+    def update(self):
+        self.t += 0.01
+        self.angle_x += 0.004
+        self.angle_y += 0.006
+        self.angle_z += 0.003
+        self.hue_offset += 0.003
+        # Animate nodes
+        for n in self.nodes:
+            n['x'] += n['vx']
+            n['y'] += n['vy']
+            n['z'] += n['vz']
+            n['pulse'] += 0.05
+            # Bounce off boundaries
+            for k in ['x', 'y', 'z']:
+                if abs(n[k]) > 1:
+                    n['v' + k] *= -1
+
+    def _rotate(self, x, y, z):
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.35
+            edges = []
+
+            # Project nodes
+            projected = []
+            for n in self.nodes:
+                x, y, z = self._rotate(n['x'], n['y'], n['z'])
+                d = 4.0
+                s = d / (d - z)
+                px, py = cx + x * s * size, cy - y * s * size
+                pulse = 0.5 + 0.5 * math.sin(n['pulse'])
+                projected.append((px, py, z, s, pulse))
+
+            # Draw edges
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, z1, s1, p1 = projected[i]
+                x2, y2, z2, s2, p2 = projected[j]
+                hue = (idx / max(1, len(self.edges_idx)) + self.hue_offset) % 1.0
+                brightness = 0.3 + 0.4 * (p1 + p2) / 2
+                lw = max(1, int(2.5 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, brightness), lw))
+
+            # Draw node halos
+            for i, (px, py, z, s, pulse) in enumerate(projected):
+                hue = (i / self.n_nodes + self.hue_offset + 0.5) % 1.0
+                r = 8 * s * (0.7 + 0.3 * pulse)
+                n_seg = 8
+                for j in range(n_seg):
+                    a1 = j * 2 * math.pi / n_seg + self.t
+                    a2 = (j + 1) * 2 * math.pi / n_seg + self.t
+                    x1, y1 = px + r * math.cos(a1), py + r * math.sin(a1)
+                    x2, y2 = px + r * math.cos(a2), py + r * math.sin(a2)
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.9, 0.5 + 0.4 * pulse), 2))
 
             return edges
         except Exception:
@@ -898,88 +1026,275 @@ class FibonacciSpiral:
 
 
 # =============================================================================
-# VISUALIZATION 13: Quantum Interference Mandala
+# VISUALIZATION 14: Uzumaki Spiral (Curlicue Fractal)
 # =============================================================================
-class QuantumInterference:
-    """Wave interference patterns from multiple sources"""
-    name = "Quantum Interference"
-    num_lines = 400
+class UzumakiSpiral:
+    """Hypnotic spiral based on the Curlicue Fractal formula"""
+    name = "Uzumaki Spiral"
+    num_lines = 500
 
     def __init__(self):
         self.t = 0.0
         self.hue_offset = 0.0
-        self.n_sources = random.choice([5, 6, 7, 8])
-        self.wave_count = 8
+        self.n_points = 450
 
     def update(self):
-        self.t += 0.012
-        self.hue_offset += 0.003
+        self.t += 0.003
+        self.hue_offset += 0.002
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            max_r = min(width, height) * 0.42
+            size = min(width, height) * 0.4
             edges = []
 
-            # Source positions in a circle
-            source_r = max_r * 0.7
-            sources = []
-            for i in range(self.n_sources):
-                a = i * 2 * math.pi / self.n_sources + self.t * 0.1
-                sx = cx + source_r * math.cos(a)
-                sy = cy + source_r * math.sin(a)
-                sources.append((sx, sy))
+            # Generate points using Curlicue formula
+            # F(n,t) = [n^(3/2)/(n+1000), sin(0.1n*sin(83.333t)), 0.1nt]
+            points = []
+            cumx, cumy = 0.0, 0.0
+            for n in range(1, self.n_points + 1):
+                # Curlicue angle accumulation
+                r = (n ** 1.5) / (n + 1000)
+                angle = 0.1 * n * math.sin(83.3333 * self.t + n * 0.01)
+                cumx += r * math.cos(angle)
+                cumy += r * math.sin(angle)
+                points.append((cumx, cumy))
 
-            # Draw concentric waves from each source
-            for si, (sx, sy) in enumerate(sources):
-                hue_base = (si / self.n_sources + self.hue_offset) % 1.0
-                for w in range(self.wave_count):
-                    # Wave radius expands over time
-                    wave_r = ((self.t * 30 + w * 25) % (max_r * 0.6)) + 5
-                    n_seg = 24
-                    for j in range(n_seg):
-                        a1 = j * 2 * math.pi / n_seg
-                        a2 = (j + 1) * 2 * math.pi / n_seg
-                        x1 = sx + wave_r * math.cos(a1)
-                        y1 = sy + wave_r * math.sin(a1)
-                        x2 = sx + wave_r * math.cos(a2)
-                        y2 = sy + wave_r * math.sin(a2)
-                        # Fade based on wave age
-                        fade = 1 - (wave_r / (max_r * 0.6))
-                        hue = (hue_base + w * 0.05) % 1.0
-                        edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, fade * 0.6), 1))
+            # Normalize and center
+            if points:
+                minx = min(p[0] for p in points)
+                maxx = max(p[0] for p in points)
+                miny = min(p[1] for p in points)
+                maxy = max(p[1] for p in points)
+                rangex = max(maxx - minx, 0.001)
+                rangey = max(maxy - miny, 0.001)
+                scale = size / max(rangex, rangey)
 
-            # Interference lines between sources
-            for i in range(self.n_sources):
-                j = (i + 1) % self.n_sources
-                x1, y1 = sources[i]
-                x2, y2 = sources[j]
-                # Draw interference pattern along the line
-                n_int = 15
-                for k in range(n_int):
-                    t = k / n_int
-                    mx = x1 + (x2 - x1) * t
-                    my = y1 + (y2 - y1) * t
-                    # Perpendicular oscillation
-                    perp_a = math.atan2(y2 - y1, x2 - x1) + math.pi / 2
-                    amp = 20 * math.sin(self.t * 3 + k * 0.8 + i * 1.5)
-                    px = mx + amp * math.cos(perp_a)
-                    py = my + amp * math.sin(perp_a)
-                    if k > 0:
-                        hue = (i / self.n_sources + k / n_int * 0.2 + self.hue_offset) % 1.0
-                        edges.append((prev_px, prev_py, px, py, hsv_to_hex(hue, 0.85, 0.7), 2))
-                    prev_px, prev_py = px, py
+                norm_points = []
+                for px, py in points:
+                    nx = cx + (px - (minx + maxx) / 2) * scale
+                    ny = cy + (py - (miny + maxy) / 2) * scale
+                    norm_points.append((nx, ny))
 
-            # Central interference node
-            n_center = 16
-            center_r = max_r * 0.1
-            for i in range(n_center):
-                a1 = self.t * 2 + i * 2 * math.pi / n_center
-                a2 = self.t * 2 + (i + 1) * 2 * math.pi / n_center
-                r = center_r * (1 + 0.3 * math.sin(self.t * 4 + i))
-                x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
-                x2, y2 = cx + r * math.cos(a2), cy + r * math.sin(a2)
-                edges.append((x1, y1, x2, y2, hsv_to_hex((self.hue_offset + 0.5) % 1, 0.9, 0.85), 2))
+                # Draw lines
+                for i in range(1, len(norm_points)):
+                    t = i / len(norm_points)
+                    hue = (t + self.hue_offset) % 1.0
+                    edges.append((norm_points[i-1][0], norm_points[i-1][1],
+                                 norm_points[i][0], norm_points[i][1],
+                                 hsv_to_hex(hue, 0.8, 0.5 + t * 0.45), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 15: Fourier Epicycles
+# =============================================================================
+class FourierEpicycles:
+    """Epicycles drawing complex shapes - Fourier transform visualization"""
+    name = "Fourier Epicycles"
+    num_lines = 450
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.trail = []
+        self.max_trail = 350
+        # Define epicycles: (radius, frequency, phase)
+        self.n_cycles = random.randint(5, 8)
+        self.cycles = []
+        for i in range(self.n_cycles):
+            r = 1.0 / (2 * i + 1)  # Decreasing radii
+            freq = 2 * i + 1  # Odd harmonics (square wave approx)
+            phase = random.random() * math.pi * 2
+            self.cycles.append((r * 0.8, freq, phase))
+
+    def update(self):
+        self.t += 0.015
+        self.hue_offset += 0.003
+
+        # Calculate endpoint
+        x, y = 0.0, 0.0
+        for r, freq, phase in self.cycles:
+            x += r * math.cos(freq * self.t + phase)
+            y += r * math.sin(freq * self.t + phase)
+        self.trail.append((x, y))
+        if len(self.trail) > self.max_trail:
+            self.trail = self.trail[-self.max_trail:]
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.3
+            edges = []
+
+            # Draw epicycle circles and arms
+            x, y = 0.0, 0.0
+            for ci, (r, freq, phase) in enumerate(self.cycles):
+                # Circle
+                n_seg = 24
+                hue = (ci / self.n_cycles + self.hue_offset) % 1.0
+                for i in range(n_seg):
+                    a1 = i * 2 * math.pi / n_seg
+                    a2 = (i + 1) * 2 * math.pi / n_seg
+                    x1 = cx + (x + r * math.cos(a1)) * size
+                    y1 = cy - (y + r * math.sin(a1)) * size
+                    x2 = cx + (x + r * math.cos(a2)) * size
+                    y2 = cy - (y + r * math.sin(a2)) * size
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.5, 0.35), 1))
+
+                # Arm to next center
+                nx = x + r * math.cos(freq * self.t + phase)
+                ny = y + r * math.sin(freq * self.t + phase)
+                edges.append((cx + x * size, cy - y * size,
+                             cx + nx * size, cy - ny * size,
+                             hsv_to_hex(hue, 0.7, 0.6), 2))
+                x, y = nx, ny
+
+            # Draw trail
+            for i in range(1, len(self.trail)):
+                t = i / len(self.trail)
+                hue = (t + self.hue_offset + 0.5) % 1.0
+                x1, y1 = self.trail[i - 1]
+                x2, y2 = self.trail[i]
+                edges.append((cx + x1 * size, cy - y1 * size,
+                             cx + x2 * size, cy - y2 * size,
+                             hsv_to_hex(hue, 0.9, 0.4 + t * 0.55), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 16: Semicircle Light Reflection
+# =============================================================================
+class SemicircleReflection:
+    """Light rays bouncing inside a semicircle - mesmerizing reflections"""
+    name = "Light Reflection"
+    num_lines = 550
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_rays = 80
+        self.bounce_count = 5
+
+    def update(self):
+        self.t += 0.004
+        self.hue_offset += 0.003
+
+    def _reflect_in_semicircle(self, x, y, dx, dy, radius, cy_base):
+        """Reflect a ray off the semicircle arc"""
+        # Find intersection with semicircle (top half)
+        # Circle: x^2 + (y-cy_base)^2 = r^2, y >= cy_base
+        # Ray: P + t*D
+        # Solve quadratic
+        a = dx*dx + dy*dy
+        b = 2*(x*dx + (y - cy_base)*dy)
+        c = x*x + (y - cy_base)**2 - radius*radius
+
+        disc = b*b - 4*a*c
+        if disc < 0:
+            return None
+
+        t1 = (-b + math.sqrt(disc)) / (2*a)
+        t2 = (-b - math.sqrt(disc)) / (2*a)
+
+        # Take positive t that gives y >= cy_base
+        t = None
+        for tt in [t1, t2]:
+            if tt > 0.01:
+                ny = y + tt * dy
+                if ny >= cy_base - 1:
+                    if t is None or tt < t:
+                        t = tt
+
+        if t is None:
+            return None
+
+        # Hit point
+        hx = x + t * dx
+        hy = y + t * dy
+
+        # Normal at hit point (pointing inward)
+        nx = -hx / radius
+        ny = -(hy - cy_base) / radius
+
+        # Reflect direction
+        dot = dx * nx + dy * ny
+        rdx = dx - 2 * dot * nx
+        rdy = dy - 2 * dot * ny
+
+        return (hx, hy, rdx, rdy)
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            radius = min(width, height) * 0.42
+            cy_base = cy + radius * 0.1  # Semicircle base slightly below center
+            edges = []
+
+            # Draw semicircle arc
+            n_arc = 50
+            for i in range(n_arc):
+                a1 = math.pi * i / n_arc
+                a2 = math.pi * (i + 1) / n_arc
+                x1 = cx + radius * math.cos(a1)
+                y1 = cy_base - radius * math.sin(a1)
+                x2 = cx + radius * math.cos(a2)
+                y2 = cy_base - radius * math.sin(a2)
+                hue = (i / n_arc + self.hue_offset) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.4, 0.5), 2))
+
+            # Draw base line
+            edges.append((cx - radius, cy_base, cx + radius, cy_base,
+                         hsv_to_hex(self.hue_offset, 0.3, 0.4), 2))
+
+            # Cast rays from bottom
+            for ri in range(self.n_rays):
+                # Start position along base
+                start_t = (ri + 0.5) / self.n_rays
+                sx = cx - radius + 2 * radius * start_t
+
+                # Direction: upward with slight angle variation
+                angle = math.pi / 2 + math.sin(self.t * 2 + ri * 0.1) * 0.3
+                dx = math.cos(angle)
+                dy = -math.sin(angle)  # Negative because y increases downward
+
+                ray_x, ray_y = sx, cy_base
+                hue_base = (start_t + self.hue_offset) % 1.0
+
+                # Bounce multiple times
+                for bounce in range(self.bounce_count):
+                    result = self._reflect_in_semicircle(ray_x - cx, ray_y - cy_base, dx, dy, radius, 0)
+                    if result is None:
+                        # Ray escapes or hits base
+                        # Draw to base or edge
+                        if dy > 0:  # Going down
+                            t_base = (cy_base - ray_y) / dy if dy != 0 else 1000
+                            end_x = ray_x + t_base * dx
+                            end_y = cy_base
+                            hue = (hue_base + bounce * 0.1) % 1.0
+                            bright = 0.7 - bounce * 0.1
+                            edges.append((ray_x, ray_y, end_x, end_y,
+                                         hsv_to_hex(hue, 0.85, max(0.3, bright)), 1))
+                        break
+
+                    hx, hy, rdx, rdy = result
+                    hx += cx
+                    hy += cy_base
+
+                    # Draw ray segment
+                    hue = (hue_base + bounce * 0.12) % 1.0
+                    bright = 0.8 - bounce * 0.12
+                    edges.append((ray_x, ray_y, hx, hy,
+                                 hsv_to_hex(hue, 0.9, max(0.25, bright)), 2))
+
+                    ray_x, ray_y = hx, hy
+                    dx, dy = rdx, rdy
 
             return edges
         except Exception:
@@ -1020,13 +1335,14 @@ class StarField:
 # MAIN SCREENSAVER
 # =============================================================================
 class Screensaver:
-    """Multi-visualization screensaver - 13 Mandalas & 3D shapes"""
+    """Multi-visualization screensaver - 16 Mandalas & 3D shapes"""
 
     VISUALIZATIONS = [
         Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
         RotatingDodecahedron, SriYantra, Merkaba, Cell24,
         KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
-        FibonacciSpiral, QuantumInterference
+        Hyperdodecahedron, CosmicWeb,
+        UzumakiSpiral, FourierEpicycles, SemicircleReflection
     ]
 
     def __init__(self):
