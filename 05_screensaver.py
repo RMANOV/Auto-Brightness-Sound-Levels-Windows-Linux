@@ -1026,63 +1026,94 @@ class CosmicWeb:
 
 
 # =============================================================================
-# VISUALIZATION 14: Uzumaki Spiral (Curlicue Fractal)
+# VISUALIZATION 14: Uzumaki Spiral (3D Curlicue Fractal)
 # =============================================================================
-class UzumakiSpiral:
-    """Hypnotic spiral based on the Curlicue Fractal formula"""
+class UzumakiSpiral3D:
+    """3D Curlicue Fractal spiral with hypnotic rotation"""
     name = "Uzumaki Spiral"
-    num_lines = 500
+    num_lines = 450
 
     def __init__(self):
-        self.t = 0.0
+        self.angle_xz = 0.0  # Rotation around Y axis
+        self.angle_yz = 0.0  # Tilt
+        self.t = 0.0         # Time parameter for spiral evolution
         self.hue_offset = 0.0
-        self.n_points = 450
+        self.n_points = 380
+        self.s = 2.39996323  # Silver ratio - creates beautiful curlicue pattern
 
     def update(self):
-        self.t += 0.003
-        self.hue_offset += 0.002
+        self.angle_xz += 0.011  # Smooth rotation
+        self.angle_yz += 0.004  # Slow tilt
+        self.t += 0.006        # Spiral evolution
+        self.hue_offset += 0.003
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            size = min(width, height) * 0.4
+            size = min(width, height) * 0.35
             edges = []
+            d = 4.0  # Viewing distance for perspective
 
-            # Generate points using Curlicue formula
-            # F(n,t) = [n^(3/2)/(n+1000), sin(0.1n*sin(83.333t)), 0.1nt]
-            points = []
-            cumx, cumy = 0.0, 0.0
+            # Generate 3D points using Curlicue formula
+            points_3d = []
+            cumulative_angle = 0.0
+            breath = 1 + 0.15 * math.sin(self.t * 0.8)  # Breathing effect
+
             for n in range(1, self.n_points + 1):
-                # Curlicue angle accumulation
-                r = (n ** 1.5) / (n + 1000)
-                angle = 0.1 * n * math.sin(83.3333 * self.t + n * 0.01)
-                cumx += r * math.cos(angle)
-                cumy += r * math.sin(angle)
-                points.append((cumx, cumy))
+                # Curlicue: angle accumulates by s*n (creates fractal pattern)
+                cumulative_angle += self.s + 0.0001 * math.sin(self.t + n * 0.02)
 
-            # Normalize and center
-            if points:
-                minx = min(p[0] for p in points)
-                maxx = max(p[0] for p in points)
-                miny = min(p[1] for p in points)
-                maxy = max(p[1] for p in points)
-                rangex = max(maxx - minx, 0.001)
-                rangey = max(maxy - miny, 0.001)
-                scale = size / max(rangex, rangey)
+                # Radius grows with sqrt for even distribution
+                r = math.sqrt(n) * 0.08 * breath
 
-                norm_points = []
-                for px, py in points:
-                    nx = cx + (px - (minx + maxx) / 2) * scale
-                    ny = cy + (py - (miny + maxy) / 2) * scale
-                    norm_points.append((nx, ny))
+                # 3D coordinates - spiral rises in Z
+                x = r * math.cos(cumulative_angle)
+                y = r * math.sin(cumulative_angle)
+                z = (n / self.n_points - 0.5) * 2.5  # Z from -1.25 to 1.25
 
-                # Draw lines
-                for i in range(1, len(norm_points)):
-                    t = i / len(norm_points)
-                    hue = (t + self.hue_offset) % 1.0
-                    edges.append((norm_points[i-1][0], norm_points[i-1][1],
-                                 norm_points[i][0], norm_points[i][1],
-                                 hsv_to_hex(hue, 0.8, 0.5 + t * 0.45), 2))
+                points_3d.append((x, y, z, n / self.n_points))
+
+            # Apply 3D rotations and project
+            projected = []
+            cos_xz, sin_xz = math.cos(self.angle_xz), math.sin(self.angle_xz)
+            cos_yz, sin_yz = math.cos(self.angle_yz), math.sin(self.angle_yz)
+
+            for x, y, z, t in points_3d:
+                # XZ rotation (around Y axis)
+                x2 = x * cos_xz - z * sin_xz
+                z2 = x * sin_xz + z * cos_xz
+
+                # YZ rotation (tilt)
+                y2 = y * cos_yz - z2 * sin_yz
+                z3 = y * sin_yz + z2 * cos_yz
+
+                # Perspective projection
+                scale = d / (d - z3) if (d - z3) > 0.1 else d / 0.1
+                screen_x = cx + x2 * scale * size
+                screen_y = cy - y2 * scale * size
+
+                # Depth for coloring (0 = far, 1 = close)
+                depth = (z3 + 2) / 4  # Normalize z3 to 0-1 range
+
+                projected.append((screen_x, screen_y, depth, scale, t))
+
+            # Draw lines connecting consecutive points
+            for i in range(1, len(projected)):
+                x1, y1, d1, s1, t1 = projected[i - 1]
+                x2, y2, d2, s2, t2 = projected[i]
+
+                # Color based on position + depth
+                hue = (t2 + self.hue_offset) % 1.0
+                avg_depth = (d1 + d2) / 2
+                brightness = 0.4 + avg_depth * 0.55  # Closer = brighter
+                saturation = 0.7 + avg_depth * 0.25
+
+                # Line width based on scale (perspective)
+                avg_scale = (s1 + s2) / 2
+                lw = max(1, min(4, int(avg_scale * 1.8)))
+
+                edges.append((x1, y1, x2, y2,
+                             hsv_to_hex(hue, saturation, brightness), lw))
 
             return edges
         except Exception:
@@ -1101,7 +1132,7 @@ class FourierEpicycles:
         self.t = 0.0
         self.hue_offset = 0.0
         self.trail = []
-        self.max_trail = 350
+        self.max_trail = 400
         # Define epicycles: (radius, frequency, phase)
         self.n_cycles = random.randint(5, 8)
         self.cycles = []
@@ -1143,14 +1174,14 @@ class FourierEpicycles:
                     y1 = cy - (y + r * math.sin(a1)) * size
                     x2 = cx + (x + r * math.cos(a2)) * size
                     y2 = cy - (y + r * math.sin(a2)) * size
-                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.5, 0.35), 1))
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, 0.6), 1))
 
                 # Arm to next center
                 nx = x + r * math.cos(freq * self.t + phase)
                 ny = y + r * math.sin(freq * self.t + phase)
                 edges.append((cx + x * size, cy - y * size,
                              cx + nx * size, cy - ny * size,
-                             hsv_to_hex(hue, 0.7, 0.6), 2))
+                             hsv_to_hex(hue, 0.9, 0.85), 2))
                 x, y = nx, ny
 
             # Draw trail
@@ -1161,7 +1192,7 @@ class FourierEpicycles:
                 x2, y2 = self.trail[i]
                 edges.append((cx + x1 * size, cy - y1 * size,
                              cx + x2 * size, cy - y2 * size,
-                             hsv_to_hex(hue, 0.9, 0.4 + t * 0.55), 2))
+                             hsv_to_hex(hue, 0.9, 0.5 + t * 0.5), 3))
 
             return edges
         except Exception:
@@ -1169,132 +1200,139 @@ class FourierEpicycles:
 
 
 # =============================================================================
-# VISUALIZATION 16: Semicircle Light Reflection
+# VISUALIZATION 16: Bouncing Particles
 # =============================================================================
-class SemicircleReflection:
-    """Light rays bouncing inside a semicircle - mesmerizing reflections"""
-    name = "Light Reflection"
-    num_lines = 550
+class BouncingParticles:
+    """Particles bouncing off walls and obstacles - dynamic simulation"""
+    name = "Bouncing Particles"
+    num_lines = 500
 
     def __init__(self):
         self.t = 0.0
         self.hue_offset = 0.0
-        self.n_rays = 80
-        self.bounce_count = 5
+        self.n_particles = 35
+        self.trail_len = 18
+        # Each particle: [x, y, vx, vy, hue, trail]
+        self.particles = []
+        for i in range(self.n_particles):
+            angle = random.random() * 2 * math.pi
+            speed = random.uniform(3, 7)
+            self.particles.append({
+                'x': random.uniform(0.2, 0.8),
+                'y': random.uniform(0.2, 0.8),
+                'vx': math.cos(angle) * speed * 0.01,
+                'vy': math.sin(angle) * speed * 0.01,
+                'hue': i / self.n_particles,
+                'trail': []
+            })
+        self.obstacle_radius = 0.12
+        self.obstacle_angle = 0.0
 
     def update(self):
-        self.t += 0.004
-        self.hue_offset += 0.003
+        self.t += 0.016
+        self.hue_offset += 0.002
+        self.obstacle_angle += 0.008
 
-    def _reflect_in_semicircle(self, x, y, dx, dy, radius, cy_base):
-        """Reflect a ray off the semicircle arc"""
-        # Find intersection with semicircle (top half)
-        # Circle: x^2 + (y-cy_base)^2 = r^2, y >= cy_base
-        # Ray: P + t*D
-        # Solve quadratic
-        a = dx*dx + dy*dy
-        b = 2*(x*dx + (y - cy_base)*dy)
-        c = x*x + (y - cy_base)**2 - radius*radius
+        # Update particles
+        for p in self.particles:
+            # Store trail
+            p['trail'].append((p['x'], p['y']))
+            if len(p['trail']) > self.trail_len:
+                p['trail'] = p['trail'][-self.trail_len:]
 
-        disc = b*b - 4*a*c
-        if disc < 0:
-            return None
+            # Move
+            p['x'] += p['vx']
+            p['y'] += p['vy']
 
-        t1 = (-b + math.sqrt(disc)) / (2*a)
-        t2 = (-b - math.sqrt(disc)) / (2*a)
+            # Bounce off walls
+            if p['x'] < 0.08 or p['x'] > 0.92:
+                p['vx'] *= -1
+                p['x'] = max(0.08, min(0.92, p['x']))
+                p['hue'] = (p['hue'] + 0.1) % 1.0
+            if p['y'] < 0.12 or p['y'] > 0.88:
+                p['vy'] *= -1
+                p['y'] = max(0.12, min(0.88, p['y']))
+                p['hue'] = (p['hue'] + 0.1) % 1.0
 
-        # Take positive t that gives y >= cy_base
-        t = None
-        for tt in [t1, t2]:
-            if tt > 0.01:
-                ny = y + tt * dy
-                if ny >= cy_base - 1:
-                    if t is None or tt < t:
-                        t = tt
-
-        if t is None:
-            return None
-
-        # Hit point
-        hx = x + t * dx
-        hy = y + t * dy
-
-        # Normal at hit point (pointing inward)
-        nx = -hx / radius
-        ny = -(hy - cy_base) / radius
-
-        # Reflect direction
-        dot = dx * nx + dy * ny
-        rdx = dx - 2 * dot * nx
-        rdy = dy - 2 * dot * ny
-
-        return (hx, hy, rdx, rdy)
+            # Bounce off central obstacle (moving)
+            obs_x = 0.5 + 0.15 * math.cos(self.obstacle_angle)
+            obs_y = 0.5 + 0.15 * math.sin(self.obstacle_angle * 0.7)
+            dx = p['x'] - obs_x
+            dy = p['y'] - obs_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist < self.obstacle_radius and dist > 0.001:
+                # Normalize and reflect
+                nx, ny = dx / dist, dy / dist
+                dot = p['vx'] * nx + p['vy'] * ny
+                if dot < 0:  # Moving towards obstacle
+                    p['vx'] -= 2 * dot * nx
+                    p['vy'] -= 2 * dot * ny
+                    # Push out
+                    p['x'] = obs_x + nx * (self.obstacle_radius + 0.01)
+                    p['y'] = obs_y + ny * (self.obstacle_radius + 0.01)
+                    p['hue'] = (p['hue'] + 0.15) % 1.0
 
     def get_edges(self, width, height):
         try:
             cx, cy = width / 2, height / 2
-            radius = min(width, height) * 0.42
-            cy_base = cy + radius * 0.1  # Semicircle base slightly below center
             edges = []
 
-            # Draw semicircle arc
-            n_arc = 50
-            for i in range(n_arc):
-                a1 = math.pi * i / n_arc
-                a2 = math.pi * (i + 1) / n_arc
-                x1 = cx + radius * math.cos(a1)
-                y1 = cy_base - radius * math.sin(a1)
-                x2 = cx + radius * math.cos(a2)
-                y2 = cy_base - radius * math.sin(a2)
-                hue = (i / n_arc + self.hue_offset) % 1.0
-                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.4, 0.5), 2))
+            # Draw boundary rectangle
+            margin = min(width, height) * 0.08
+            corners = [
+                (margin, margin * 1.5),
+                (width - margin, margin * 1.5),
+                (width - margin, height - margin),
+                (margin, height - margin)
+            ]
+            for i in range(4):
+                x1, y1 = corners[i]
+                x2, y2 = corners[(i + 1) % 4]
+                hue = (i * 0.25 + self.hue_offset) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.4, 0.4), 2))
 
-            # Draw base line
-            edges.append((cx - radius, cy_base, cx + radius, cy_base,
-                         hsv_to_hex(self.hue_offset, 0.3, 0.4), 2))
+            # Draw moving obstacle circle
+            obs_x = 0.5 + 0.15 * math.cos(self.obstacle_angle)
+            obs_y = 0.5 + 0.15 * math.sin(self.obstacle_angle * 0.7)
+            obs_px = margin + obs_x * (width - 2 * margin)
+            obs_py = margin * 1.5 + obs_y * (height - margin * 2.5)
+            obs_r = self.obstacle_radius * min(width - 2 * margin, height - margin * 2.5)
+            n_seg = 24
+            for i in range(n_seg):
+                a1 = i * 2 * math.pi / n_seg
+                a2 = (i + 1) * 2 * math.pi / n_seg
+                x1 = obs_px + obs_r * math.cos(a1)
+                y1 = obs_py + obs_r * math.sin(a1)
+                x2 = obs_px + obs_r * math.cos(a2)
+                y2 = obs_py + obs_r * math.sin(a2)
+                hue = (i / n_seg + self.hue_offset + 0.5) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.6, 0.55), 2))
 
-            # Cast rays from bottom
-            for ri in range(self.n_rays):
-                # Start position along base
-                start_t = (ri + 0.5) / self.n_rays
-                sx = cx - radius + 2 * radius * start_t
+            # Draw particles and trails
+            w_inner = width - 2 * margin
+            h_inner = height - margin * 2.5
+            for p in self.particles:
+                trail = p['trail']
+                hue = (p['hue'] + self.hue_offset) % 1.0
 
-                # Direction: upward with slight angle variation
-                angle = math.pi / 2 + math.sin(self.t * 2 + ri * 0.1) * 0.3
-                dx = math.cos(angle)
-                dy = -math.sin(angle)  # Negative because y increases downward
+                # Draw trail
+                for i in range(1, len(trail)):
+                    t = i / len(trail)
+                    x1 = margin + trail[i-1][0] * w_inner
+                    y1 = margin * 1.5 + trail[i-1][1] * h_inner
+                    x2 = margin + trail[i][0] * w_inner
+                    y2 = margin * 1.5 + trail[i][1] * h_inner
+                    trail_hue = (hue + (1 - t) * 0.2) % 1.0
+                    edges.append((x1, y1, x2, y2,
+                                 hsv_to_hex(trail_hue, 0.85, 0.3 + t * 0.6),
+                                 max(1, int(t * 3))))
 
-                ray_x, ray_y = sx, cy_base
-                hue_base = (start_t + self.hue_offset) % 1.0
-
-                # Bounce multiple times
-                for bounce in range(self.bounce_count):
-                    result = self._reflect_in_semicircle(ray_x - cx, ray_y - cy_base, dx, dy, radius, 0)
-                    if result is None:
-                        # Ray escapes or hits base
-                        # Draw to base or edge
-                        if dy > 0:  # Going down
-                            t_base = (cy_base - ray_y) / dy if dy != 0 else 1000
-                            end_x = ray_x + t_base * dx
-                            end_y = cy_base
-                            hue = (hue_base + bounce * 0.1) % 1.0
-                            bright = 0.7 - bounce * 0.1
-                            edges.append((ray_x, ray_y, end_x, end_y,
-                                         hsv_to_hex(hue, 0.85, max(0.3, bright)), 1))
-                        break
-
-                    hx, hy, rdx, rdy = result
-                    hx += cx
-                    hy += cy_base
-
-                    # Draw ray segment
-                    hue = (hue_base + bounce * 0.12) % 1.0
-                    bright = 0.8 - bounce * 0.12
-                    edges.append((ray_x, ray_y, hx, hy,
-                                 hsv_to_hex(hue, 0.9, max(0.25, bright)), 2))
-
-                    ray_x, ray_y = hx, hy
-                    dx, dy = rdx, rdy
+                # Draw current position as small cross
+                px = margin + p['x'] * w_inner
+                py = margin * 1.5 + p['y'] * h_inner
+                size = 4
+                edges.append((px - size, py, px + size, py, hsv_to_hex(hue, 0.9, 0.95), 2))
+                edges.append((px, py - size, px, py + size, hsv_to_hex(hue, 0.9, 0.95), 2))
 
             return edges
         except Exception:
@@ -1342,7 +1380,7 @@ class Screensaver:
         RotatingDodecahedron, SriYantra, Merkaba, Cell24,
         KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
         Hyperdodecahedron, CosmicWeb,
-        UzumakiSpiral, FourierEpicycles, SemicircleReflection
+        UzumakiSpiral3D, FourierEpicycles, BouncingParticles
     ]
 
     def __init__(self):
