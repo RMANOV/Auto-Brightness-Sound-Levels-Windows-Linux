@@ -1200,7 +1200,148 @@ class FourierEpicycles:
 
 
 # =============================================================================
-# VISUALIZATION 16: Bouncing Particles
+# VISUALIZATION 16: Geodesic Sphere (Triangulated)
+# =============================================================================
+class GeodesicSphere:
+    """Slowly rotating sphere made of triangles - icosahedron subdivision"""
+    name = "Geodesic Sphere"
+    num_lines = 400
+
+    def __init__(self):
+        self.angle_x = 0.0
+        self.angle_y = 0.0
+        self.angle_z = 0.0
+        self.hue_offset = 0.0
+        self.subdivisions = 2  # Level of detail
+
+        # Generate icosahedron vertices
+        phi = (1 + math.sqrt(5)) / 2  # Golden ratio
+        self.base_verts = [
+            (-1, phi, 0), (1, phi, 0), (-1, -phi, 0), (1, -phi, 0),
+            (0, -1, phi), (0, 1, phi), (0, -1, -phi), (0, 1, -phi),
+            (phi, 0, -1), (phi, 0, 1), (-phi, 0, -1), (-phi, 0, 1)
+        ]
+        # Normalize to unit sphere
+        self.base_verts = [self._normalize(v) for v in self.base_verts]
+
+        # Icosahedron faces (20 triangles)
+        self.base_faces = [
+            (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+            (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+            (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+            (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)
+        ]
+
+        # Subdivide for smoother sphere
+        self.vertices, self.edges = self._subdivide_icosahedron()
+
+    def _normalize(self, v):
+        length = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+        if length < 0.0001:
+            return (0, 0, 1)
+        return (v[0]/length, v[1]/length, v[2]/length)
+
+    def _midpoint(self, v1, v2):
+        mid = ((v1[0]+v2[0])/2, (v1[1]+v2[1])/2, (v1[2]+v2[2])/2)
+        return self._normalize(mid)  # Project to sphere
+
+    def _subdivide_icosahedron(self):
+        vertices = list(self.base_verts)
+        faces = list(self.base_faces)
+
+        for _ in range(self.subdivisions):
+            new_faces = []
+            edge_cache = {}
+
+            for f in faces:
+                v0, v1, v2 = f
+                # Get or create midpoints
+                mids = []
+                for edge in [(v0, v1), (v1, v2), (v2, v0)]:
+                    key = tuple(sorted(edge))
+                    if key not in edge_cache:
+                        mid = self._midpoint(vertices[edge[0]], vertices[edge[1]])
+                        edge_cache[key] = len(vertices)
+                        vertices.append(mid)
+                    mids.append(edge_cache[key])
+
+                m01, m12, m20 = mids
+                new_faces.extend([
+                    (v0, m01, m20), (v1, m12, m01),
+                    (v2, m20, m12), (m01, m12, m20)
+                ])
+            faces = new_faces
+
+        # Extract unique edges from faces
+        edge_set = set()
+        for f in faces:
+            v0, v1, v2 = f
+            for e in [(v0, v1), (v1, v2), (v2, v0)]:
+                edge_set.add(tuple(sorted(e)))
+
+        return vertices, list(edge_set)
+
+    def update(self):
+        self.angle_x += 0.004  # Very slow rotation
+        self.angle_y += 0.006
+        self.angle_z += 0.002
+        self.hue_offset += 0.002
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.38
+            d = 4.0  # Viewing distance
+            edges = []
+
+            # Rotation matrices
+            cx_r, sx_r = math.cos(self.angle_x), math.sin(self.angle_x)
+            cy_r, sy_r = math.cos(self.angle_y), math.sin(self.angle_y)
+            cz_r, sz_r = math.cos(self.angle_z), math.sin(self.angle_z)
+
+            # Transform and project vertices
+            projected = []
+            for vx, vy, vz in self.vertices:
+                # Rotate X
+                y1 = vy * cx_r - vz * sx_r
+                z1 = vy * sx_r + vz * cx_r
+                # Rotate Y
+                x2 = vx * cy_r + z1 * sy_r
+                z2 = -vx * sy_r + z1 * cy_r
+                # Rotate Z
+                x3 = x2 * cz_r - y1 * sz_r
+                y3 = x2 * sz_r + y1 * cz_r
+
+                # Perspective
+                scale = d / (d - z2) if (d - z2) > 0.1 else d / 0.1
+                sx = cx + x3 * scale * size
+                sy = cy - y3 * scale * size
+                depth = (z2 + 1.5) / 3  # Normalize depth 0-1
+
+                projected.append((sx, sy, depth, scale))
+
+            # Draw edges
+            for i, (v1, v2) in enumerate(self.edges):
+                x1, y1, d1, s1 = projected[v1]
+                x2, y2, d2, s2 = projected[v2]
+
+                avg_depth = (d1 + d2) / 2
+                hue = (i / len(self.edges) + self.hue_offset) % 1.0
+                brightness = 0.35 + avg_depth * 0.6
+                saturation = 0.6 + avg_depth * 0.35
+
+                lw = max(1, int((s1 + s2) / 2 * 1.5))
+
+                edges.append((x1, y1, x2, y2,
+                             hsv_to_hex(hue, saturation, brightness), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 17: Bouncing Particles
 # =============================================================================
 class BouncingParticles:
     """Particles bouncing off walls and obstacles - dynamic simulation"""
@@ -1373,14 +1514,14 @@ class StarField:
 # MAIN SCREENSAVER
 # =============================================================================
 class Screensaver:
-    """Multi-visualization screensaver - 16 Mandalas & 3D shapes"""
+    """Multi-visualization screensaver - 17 Mandalas & 3D shapes"""
 
     VISUALIZATIONS = [
         Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
         RotatingDodecahedron, SriYantra, Merkaba, Cell24,
         KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
-        Hyperdodecahedron, CosmicWeb,
-        UzumakiSpiral3D, FourierEpicycles, BouncingParticles
+        Hyperdodecahedron, CosmicWeb, UzumakiSpiral3D,
+        FourierEpicycles, GeodesicSphere, BouncingParticles
     ]
 
     def __init__(self):
