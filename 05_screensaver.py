@@ -1126,7 +1126,7 @@ class UzumakiSpiral3D:
 class FourierEpicycles:
     """Epicycles drawing complex shapes - Fourier transform visualization"""
     name = "Fourier Epicycles"
-    num_lines = 450
+    num_lines = 650  # circles(8*24=192) + arms(8) + trail(400) + buffer
 
     def __init__(self):
         self.t = 0.0
@@ -1146,7 +1146,7 @@ class FourierEpicycles:
         self.t += 0.015
         self.hue_offset += 0.003
 
-        # Calculate endpoint
+        # Calculate endpoint (same logic as in get_edges for arm endpoint)
         x, y = 0.0, 0.0
         for r, freq, phase in self.cycles:
             x += r * math.cos(freq * self.t + phase)
@@ -1164,8 +1164,8 @@ class FourierEpicycles:
             # Draw epicycle circles and arms
             x, y = 0.0, 0.0
             for ci, (r, freq, phase) in enumerate(self.cycles):
-                # Circle
-                n_seg = 24
+                # Circle (fewer segments for efficiency)
+                n_seg = 16
                 hue = (ci / self.n_cycles + self.hue_offset) % 1.0
                 for i in range(n_seg):
                     a1 = i * 2 * math.pi / n_seg
@@ -1174,7 +1174,7 @@ class FourierEpicycles:
                     y1 = cy - (y + r * math.sin(a1)) * size
                     x2 = cx + (x + r * math.cos(a2)) * size
                     y2 = cy - (y + r * math.sin(a2)) * size
-                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, 0.6), 1))
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.5, 0.4), 1))
 
                 # Arm to next center
                 nx = x + r * math.cos(freq * self.t + phase)
@@ -1183,6 +1183,13 @@ class FourierEpicycles:
                              cx + nx * size, cy - ny * size,
                              hsv_to_hex(hue, 0.9, 0.85), 2))
                 x, y = nx, ny
+
+            # Connect final pendulum position to trail start (if trail exists)
+            if len(self.trail) > 0:
+                tx, ty = self.trail[-1]
+                edges.append((cx + x * size, cy - y * size,
+                             cx + tx * size, cy - ty * size,
+                             hsv_to_hex((self.hue_offset + 0.5) % 1.0, 0.95, 0.9), 3))
 
             # Draw trail
             for i in range(1, len(self.trail)):
@@ -1481,6 +1488,153 @@ class BouncingParticles:
 
 
 # =============================================================================
+# VISUALIZATION 18: Tunnel Flight (Curved Warp Tunnel)
+# =============================================================================
+class TunnelFlight:
+    """High-speed flight through a curved tunnel of rectangles"""
+    name = "Tunnel Flight"
+    num_lines = 500
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.speed = 0.06  # How fast frames approach
+        self.n_frames = 7  # Number of rectangular frames in tunnel
+        self.curve_freq_x = 0.4  # Curvature frequency X
+        self.curve_freq_y = 0.3  # Curvature frequency Y
+        self.curve_amp = 0.35  # Curvature amplitude
+        # Initialize frame Z positions (0 = closest, 1 = farthest)
+        self.frames = [{'z': i / self.n_frames, 'phase': random.random() * math.pi * 2}
+                       for i in range(self.n_frames)]
+
+    def update(self):
+        self.t += self.speed
+        self.hue_offset += 0.004
+        # Move frames towards viewer
+        for f in self.frames:
+            f['z'] -= self.speed * 0.08
+            # Respawn at far end when passing viewer
+            if f['z'] < 0.02:
+                f['z'] = 1.0
+                f['phase'] = random.random() * math.pi * 2
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            edges = []
+
+            # Sort frames by Z (far to near) for proper depth rendering
+            sorted_frames = sorted(self.frames, key=lambda f: -f['z'])
+
+            for fi, frame in enumerate(sorted_frames):
+                z = frame['z']
+                if z < 0.03:
+                    continue  # Skip frames too close
+
+                # Perspective scale: closer = larger
+                # Using exponential for more dramatic effect
+                perspective = 1.0 / (z * 2.5 + 0.1)
+
+                # Curved path offset based on Z depth
+                # This creates the winding tunnel effect
+                curve_x = self.curve_amp * math.sin(self.t * self.curve_freq_x + z * 8)
+                curve_y = self.curve_amp * math.cos(self.t * self.curve_freq_y + z * 6 + 1.5)
+
+                # Frame center position (offset by curve)
+                frame_cx = cx + curve_x * width * 0.4 * (1 - z)
+                frame_cy = cy + curve_y * height * 0.3 * (1 - z)
+
+                # Rectangle size (larger when closer)
+                base_size = min(width, height) * 0.45
+                rect_w = base_size * perspective
+                rect_h = base_size * perspective * 0.7  # Slightly shorter height
+
+                # Slight rotation for added dynamism
+                rotation = math.sin(self.t * 0.3 + z * 4) * 0.15
+                cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+
+                # Four corners of rectangle (before rotation)
+                corners_local = [
+                    (-rect_w/2, -rect_h/2),
+                    (rect_w/2, -rect_h/2),
+                    (rect_w/2, rect_h/2),
+                    (-rect_w/2, rect_h/2)
+                ]
+
+                # Apply rotation and translate to frame center
+                corners = []
+                for lx, ly in corners_local:
+                    rx = lx * cos_r - ly * sin_r
+                    ry = lx * sin_r + ly * cos_r
+                    corners.append((frame_cx + rx, frame_cy + ry))
+
+                # Color based on depth (far = darker/bluer, close = brighter)
+                depth_factor = 1 - z  # 0 when far, 1 when close
+                hue = (z * 0.6 + self.hue_offset) % 1.0
+                saturation = 0.6 + depth_factor * 0.35
+                brightness = 0.25 + depth_factor * 0.7
+
+                color = hsv_to_hex(hue, saturation, brightness)
+                lw = max(1, int(2 + depth_factor * 3))
+
+                # Draw rectangle edges
+                for i in range(4):
+                    x1, y1 = corners[i]
+                    x2, y2 = corners[(i + 1) % 4]
+                    edges.append((x1, y1, x2, y2, color, lw))
+
+                # Add inner detail lines for closer frames
+                if z < 0.5 and depth_factor > 0.3:
+                    inner_scale = 0.7
+                    inner_corners = []
+                    for lx, ly in corners_local:
+                        rx = lx * inner_scale * cos_r - ly * inner_scale * sin_r
+                        ry = lx * inner_scale * sin_r + ly * inner_scale * cos_r
+                        inner_corners.append((frame_cx + rx, frame_cy + ry))
+
+                    inner_hue = (hue + 0.15) % 1.0
+                    inner_color = hsv_to_hex(inner_hue, saturation * 0.8, brightness * 0.7)
+                    inner_lw = max(1, lw - 1)
+
+                    for i in range(4):
+                        x1, y1 = inner_corners[i]
+                        x2, y2 = inner_corners[(i + 1) % 4]
+                        edges.append((x1, y1, x2, y2, inner_color, inner_lw))
+
+                    # Connecting lines from outer to inner corners
+                    for i in range(4):
+                        ox, oy = corners[i]
+                        ix, iy = inner_corners[i]
+                        conn_color = hsv_to_hex((hue + 0.3) % 1.0, saturation * 0.6, brightness * 0.5)
+                        edges.append((ox, oy, ix, iy, conn_color, 1))
+
+            # Add motion blur / speed lines at edges
+            n_speed_lines = 12
+            for i in range(n_speed_lines):
+                angle = i * 2 * math.pi / n_speed_lines
+                # Lines emanate from center towards edges
+                inner_r = min(width, height) * 0.1
+                outer_r = min(width, height) * 0.48
+
+                # Animate the speed lines
+                phase = self.t * 3 + i * 0.5
+                line_alpha = 0.3 + 0.3 * math.sin(phase)
+
+                x1 = cx + inner_r * math.cos(angle)
+                y1 = cy + inner_r * math.sin(angle)
+                x2 = cx + outer_r * math.cos(angle)
+                y2 = cy + outer_r * math.sin(angle)
+
+                speed_hue = (i / n_speed_lines + self.hue_offset + 0.5) % 1.0
+                speed_color = hsv_to_hex(speed_hue, 0.5, line_alpha)
+                edges.append((x1, y1, x2, y2, speed_color, 1))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
 # STAR FIELD (Background)
 # =============================================================================
 class StarField:
@@ -1514,14 +1668,14 @@ class StarField:
 # MAIN SCREENSAVER
 # =============================================================================
 class Screensaver:
-    """Multi-visualization screensaver - 17 Mandalas & 3D shapes"""
+    """Multi-visualization screensaver - 18 Mandalas & 3D shapes"""
 
     VISUALIZATIONS = [
         Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
         RotatingDodecahedron, SriYantra, Merkaba, Cell24,
         KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
         Hyperdodecahedron, CosmicWeb, UzumakiSpiral3D,
-        FourierEpicycles, GeodesicSphere, BouncingParticles
+        FourierEpicycles, GeodesicSphere, BouncingParticles, TunnelFlight
     ]
 
     def __init__(self):
