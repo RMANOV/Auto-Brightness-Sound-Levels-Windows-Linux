@@ -1,0 +1,21 @@
+# Build artifacts
+/target/
+*.so
+*.dylib
+*.dll
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+
+# Maturin
+.maturin_build_cache/

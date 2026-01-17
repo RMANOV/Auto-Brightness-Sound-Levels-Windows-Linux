@@ -7,10 +7,30 @@
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/adaptive_brightness_volume.py"
+RUST_BINARY="$SCRIPT_DIR/adaptive-rust/target/release/adaptive-controller"
+USE_RUST=false
 LOCK_FILE="/tmp/adaptive_controller.lock"
 LOG_FILE="/tmp/adaptive_controller.log"
 PID_FILE="/tmp/adaptive_controller.pid"
 MAX_LOG_SIZE=1048576  # 1MB
+
+# Check for --use-rust flag
+for arg in "$@"; do
+    if [[ "$arg" == "--use-rust" ]]; then
+        USE_RUST=true
+        # Remove the flag from arguments
+        set -- "${@/--use-rust/}"
+        break
+    fi
+done
+
+# Auto-detect Rust binary if available
+if [[ -x "$RUST_BINARY" ]]; then
+    # Use Rust by default if available and not explicitly disabled
+    if [[ "${PREFER_RUST:-true}" == "true" && "$USE_RUST" != "false" ]]; then
+        USE_RUST=true
+    fi
+fi
 
 # Intelligent time-based configuration
 CURRENT_HOUR=$(date +%H)
@@ -32,15 +52,16 @@ log_message() {
 is_controller_running() {
     if [[ -f "$PID_FILE" ]]; then
         local pid=$(cat "$PID_FILE")
-        
+
         # Check if PID exists and is our process
         if kill -0 "$pid" 2>/dev/null; then
-            # Verify it's actually our python script
-            if pgrep -f "adaptive_brightness_volume.py" >/dev/null; then
+            # Verify it's actually our controller (Python or Rust)
+            if pgrep -f "adaptive_brightness_volume.py" >/dev/null || \
+               pgrep -f "adaptive-controller" >/dev/null; then
                 return 0  # Running
             fi
         fi
-        
+
         # Stale PID file
         rm -f "$PID_FILE"
     fi
@@ -241,18 +262,26 @@ start_controller() {
     fi
     
     log_message "Starting adaptive controller in optimized burst mode..."
-    
+
     # Change to script directory
     cd "$SCRIPT_DIR" || {
         log_message "Failed to change to script directory: $SCRIPT_DIR"
         rm -f "$LOCK_FILE"
         return 1
     }
-    
+
     # Start controller with timeout for burst mode
     # Run for 8 minutes (enough for full warmup + adjustments + stabilization)
-    timeout 480s python3 "$PYTHON_SCRIPT" >> "$LOG_FILE" 2>&1 &
-    local python_pid=$!
+    local controller_pid
+    if [[ "$USE_RUST" == "true" && -x "$RUST_BINARY" ]]; then
+        log_message "Using Rust backend for 2-4x performance boost"
+        timeout 480s "$RUST_BINARY" >> "$LOG_FILE" 2>&1 &
+        controller_pid=$!
+    else
+        timeout 480s python3 "$PYTHON_SCRIPT" >> "$LOG_FILE" 2>&1 &
+        controller_pid=$!
+    fi
+    local python_pid=$controller_pid
     
     # Save PID
     echo $python_pid > "$PID_FILE"
