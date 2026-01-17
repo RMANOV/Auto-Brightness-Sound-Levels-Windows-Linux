@@ -16,9 +16,9 @@ license = "MIT"
 # SIMD and parallel processing
 rayon = "1.10"
 
-# FFI
-pyo3 = { version = "0.22", features = ["extension-module"] }
-numpy = "0.22"
+# FFI (pyo3 >= 0.24.1 fixes GHSA-pph8-gcv7-4qj5 buffer overflow)
+pyo3 = { version = "0.24", features = ["extension-module"] }
+numpy = "0.24"
 
 # Concurrency
 crossbeam-channel = "0.5"
