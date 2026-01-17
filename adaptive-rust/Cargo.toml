@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/ffi",
+    "crates/bin",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Adaptive Brightness Controller"]
+license = "MIT"
+
+[workspace.dependencies]
+# SIMD and parallel processing
+rayon = "1.10"
+
+# FFI
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+
+# Concurrency
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# System
+nix = { version = "0.29", features = ["signal"] }
+cpal = "0.15"
+v4l = "0.14"
+
+# Image processing
+image = "0.25"
+
+# Utils
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+anyhow = "1.0"
+
+# Core crate
+adaptive-core = { path = "crates/core" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

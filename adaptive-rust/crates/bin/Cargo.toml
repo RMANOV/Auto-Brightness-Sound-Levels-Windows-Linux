@@ -1,0 +1,21 @@
+[package]
+name = "adaptive-controller"
+version.workspace = true
+edition = "2021"
+
+[[bin]]
+name = "adaptive-controller"
+path = "src/main.rs"
+
+[dependencies]
+adaptive-core.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+nix.workspace = true
+cpal.workspace = true
+v4l.workspace = true
+image.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+rayon.workspace = true
