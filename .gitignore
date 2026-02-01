@@ -50,3 +50,5 @@ local_config/
 # Personal files that may contain sensitive data
 location.conf
 adaptive-controller/
+# Press materials (local only)
+/press-releases
