@@ -24,8 +24,14 @@ from threading import Thread, Event, Lock
 from queue import Queue, Empty
 from typing import Optional, Tuple, cast
 import re
+import shutil
 import functools
 from collections import defaultdict
+
+# Precompiled regex patterns for volume parsing
+_RE_AMIXER_VOL = re.compile(r'\[([0-9]+)%\]')
+_RE_PACTL_VOL = re.compile(r'(\d+)%')
+_RE_WPCTL_VOL = re.compile(r'Volume: ([0-9.]+)')
 
 # Performance monitoring
 perf_timers = defaultdict(list)
@@ -75,7 +81,7 @@ def comprehensive_cleanup():
                 cap = cv2.VideoCapture(i)
                 if cap.isOpened():
                     cap.release()
-            except:
+            except Exception:
                 break
     except Exception as e:
         print(f"Warning: OpenCV cleanup issue: {e}")
@@ -85,7 +91,7 @@ def comprehensive_cleanup():
         if hasattr(numba, 'cuda'):
             try:
                 numba.cuda.close()
-            except:
+            except Exception:
                 pass
         if hasattr(numba, 'typed'):
             numba.typed.List.empty_list.cache_clear()
@@ -249,6 +255,14 @@ class AdaptiveBrightnessVolumeController:
                 print("Make sure you're on a laptop with WMI brightness support.")
             sys.exit(1)
 
+        # Cache volume control tool (detect once, not every call)
+        self.volume_tool: Optional[str] = None
+        if self.system == "linux":
+            for tool in ("amixer", "pactl", "wpctl"):
+                if shutil.which(tool):
+                    self.volume_tool = tool
+                    break
+
         # Configuration
         self.camera_index: int = camera_index
         self.lock_exposure: bool = lock_exposure
@@ -291,13 +305,13 @@ class AdaptiveBrightnessVolumeController:
                 while not self.frame_queue.empty():
                     try:
                         self.frame_queue.get_nowait()
-                    except:
+                    except Empty:
                         break
             if self.brightness_queue:
                 while not self.brightness_queue.empty():
                     try:
                         self.brightness_queue.get_nowait()
-                    except:
+                    except Empty:
                         break
             if self.cap and self.cap.isOpened():
                 self.cap.release()
@@ -504,12 +518,20 @@ class AdaptiveBrightnessVolumeController:
             return 50.0
 
         if self.brightness_method == "brightnessctl":
-            brightness = os.popen("brightnessctl get").read().strip()
-            max_brightness = os.popen("brightnessctl max").read().strip()
-            return float(brightness) / float(max_brightness) * 100
+            try:
+                cur = subprocess.run(["brightnessctl", "get"], capture_output=True, text=True, timeout=3)
+                mx = subprocess.run(["brightnessctl", "max"], capture_output=True, text=True, timeout=3)
+                return float(cur.stdout.strip()) / float(mx.stdout.strip()) * 100
+            except Exception as e:
+                print(f"Error reading brightnessctl: {e}")
+                return 50.0
         elif self.brightness_method == "xbacklight":
-            brightness = os.popen("xbacklight -get").read().strip()
-            return float(brightness)
+            try:
+                r = subprocess.run(["xbacklight", "-get"], capture_output=True, text=True, timeout=3)
+                return float(r.stdout.strip())
+            except Exception as e:
+                print(f"Error reading xbacklight: {e}")
+                return 50.0
         elif self.brightness_method == "sysfs":
             try:
                 with open(f"{self.backlight_dir}/brightness", "r") as f:
@@ -581,7 +603,7 @@ class AdaptiveBrightnessVolumeController:
             try:
                 with open(f"{self.backlight_dir}/max_brightness", "r") as f:
                     max_brightness = int(f.read().strip())
-                value = int((brightness / 100) * max_brightness)
+                value = int((calibrated_brightness / 100) * max_brightness)
                 try:
                     with open(f"{self.backlight_dir}/brightness", "w") as f:
                         f.write(str(value))
@@ -614,22 +636,24 @@ class AdaptiveBrightnessVolumeController:
             return 40
 
         try:
-            if os.system("which amixer > /dev/null 2>&1") == 0:
-                output = os.popen("amixer get Master").read()
-                matches = re.search(r'\[([0-9]+)%\]', output)
-                if matches:
-                    return int(matches.group(1))
-            if os.system("which pactl > /dev/null 2>&1") == 0:
-                output = os.popen("pactl list sinks | grep Volume").read()
-                matches = re.search(r'(\d+)%', output)
-                if matches:
-                    return int(matches.group(1))
-            if os.system("which wpctl > /dev/null 2>&1") == 0:
-                output = os.popen("wpctl get-volume @DEFAULT_AUDIO_SINK@").read()
-                matches = re.search(r'Volume: ([0-9.]+)', output)
-                if matches:
-                    volume_float = float(matches.group(1))
-                    return int(volume_float * 100)
+            if self.volume_tool == "amixer":
+                result = subprocess.run(["amixer", "get", "Master"], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    m = _RE_AMIXER_VOL.search(result.stdout)
+                    if m:
+                        return int(m.group(1))
+            elif self.volume_tool == "pactl":
+                result = subprocess.run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    m = _RE_PACTL_VOL.search(result.stdout)
+                    if m:
+                        return int(m.group(1))
+            elif self.volume_tool == "wpctl":
+                result = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    m = _RE_WPCTL_VOL.search(result.stdout)
+                    if m:
+                        return int(float(m.group(1)) * 100)
             return 40
         except Exception as e:
             print(f"Error getting volume: {e}")
@@ -664,18 +688,21 @@ class AdaptiveBrightnessVolumeController:
             return
 
         success = False
-        if not success and os.system("which amixer > /dev/null 2>&1") == 0:
-            exit_code = os.system(f"amixer set Master {volume}% > /dev/null 2>&1")
-            success = (exit_code == 0)
-        if not success and os.system("which pactl > /dev/null 2>&1") == 0:
-            exit_code = os.system(f"pactl set-sink-volume @DEFAULT_SINK@ {volume}% > /dev/null 2>&1")
-            success = (exit_code == 0)
-        if not success and os.system("which wpctl > /dev/null 2>&1") == 0:
-            volume_float = volume / 100.0
-            exit_code = os.system(f"wpctl set-volume @DEFAULT_AUDIO_SINK@ {volume_float} > /dev/null 2>&1")
-            success = (exit_code == 0)
+        vol = int(volume)
+        try:
+            if self.volume_tool == "amixer":
+                r = subprocess.run(["amixer", "set", "Master", f"{vol}%"], capture_output=True, timeout=3)
+                success = (r.returncode == 0)
+            elif self.volume_tool == "pactl":
+                r = subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], capture_output=True, timeout=3)
+                success = (r.returncode == 0)
+            elif self.volume_tool == "wpctl":
+                r = subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{vol / 100.0:.2f}"], capture_output=True, timeout=3)
+                success = (r.returncode == 0)
+        except Exception as e:
+            print(f"Warning: Volume set error: {e}")
         if not success:
-            print(f"Warning: Failed to set volume to {volume}%")
+            print(f"Warning: Failed to set volume to {vol}%")
 
     # ========================================================================
     # STATE & SMOOTHING
@@ -712,6 +739,7 @@ class AdaptiveBrightnessVolumeController:
         self.last_screen_check_time: float = 0.0
         self.screen_brightness_factor: float = 1.0
         self.screen_capture_error_count: int = 0
+        self.screen_capture_enabled: bool = True
         self.max_screen_errors: int = 5
 
         self.sct = None
@@ -906,8 +934,7 @@ class AdaptiveBrightnessVolumeController:
 
     @timeit("analyze_screen_content")
     def analyze_screen_content(self) -> float:
-        global SCREEN_CAPTURE_AVAILABLE
-        if not SCREEN_CAPTURE_AVAILABLE:
+        if not SCREEN_CAPTURE_AVAILABLE or not self.screen_capture_enabled:
             return 1.0
         try:
             if self.pil_available:
@@ -980,7 +1007,7 @@ class AdaptiveBrightnessVolumeController:
                 self.screen_capture_error_count += 1
             if self.screen_capture_error_count > self.max_screen_errors + 10:
                 print(f"Warning: Disabling problematic screen capture method: {SCREEN_CAPTURE_METHOD}")
-                SCREEN_CAPTURE_AVAILABLE = False
+                self.screen_capture_enabled = False
             return 1.0
 
     @timeit("capture_audio")
@@ -997,7 +1024,8 @@ class AdaptiveBrightnessVolumeController:
                 return audio.flatten()
             elif AUDIO_METHOD == "arecord":
                 audio_file = os.path.expanduser("~/.cache/adaptive-controller/audio.wav")
-                cmd = f"arecord -q -d {self.audio_duration} -f S16_LE -r {self.audio_samplerate} -c1 {audio_file}"
+                sample_count = int(self.audio_duration * self.audio_samplerate)
+                cmd = f"arecord -q --samples={sample_count} -f S16_LE -r {self.audio_samplerate} -c1 {audio_file}"
                 result = os.system(cmd)
                 if result != 0:
                     raise Exception("Failed to record audio with arecord")
@@ -1194,7 +1222,7 @@ class AdaptiveBrightnessVolumeController:
                                     self.initial_volume = current_system_volume
                                     self.smoothed_volume = current_system_volume
                                     print(f"Initial volume locked at: {self.initial_volume}%")
-                                except:
+                                except Exception:
                                     self.initial_volume = self.smoothed_volume
                             if self.current_warmup_frame <= self.audio_warmup_threshold:
                                 self.smoothed_volume = self.initial_volume

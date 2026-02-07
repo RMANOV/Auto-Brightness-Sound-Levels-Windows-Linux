@@ -87,52 +87,38 @@ flash_detection_check() {
     
     # Optimized environmental sampling with precise timing
     cd "$SCRIPT_DIR"
-    timeout 45s python3 -c "
-import sys
-sys.path.append('$SCRIPT_DIR')
-import time
+    SAVED_BRIGHTNESS="$saved_brightness" timeout 45s python3 -c '
+import sys, os, time
 import cv2
 import numpy as np
 
+saved_brightness = float(os.environ.get("SAVED_BRIGHTNESS", "30"))
+
 try:
-    print('flash_status:starting_optimized_detection')
-    
-    # Initialize camera
+    print("flash_status:starting_optimized_detection")
     cap = cv2.VideoCapture(0)
-    
     if not cap.isOpened():
-        print('flash_error:camera_not_available')
+        print("flash_error:camera_not_available")
         sys.exit(1)
-    
-    # Configure camera quickly
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-    
-    # Wait optimized 40 seconds (35s warmup + 5s buffer for stability)
-    print('flash_status:waiting_40_seconds_for_stability')
+    print("flash_status:waiting_40_seconds_for_stability")
     time.sleep(40)
-    
-    # Take simple measurement after full wait
-    print('flash_status:taking_final_measurement')
+    print("flash_status:taking_final_measurement")
     ret, frame = cap.read()
     if ret:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        current_brightness = np.mean(gray) / 255 * 100
-        
-        # Calculate percentage change from saved state
-        brightness_change = abs(current_brightness - $saved_brightness) / max($saved_brightness, 1) * 100
-        
-        print(f'flash_brightness:{current_brightness:.1f}')
-        print(f'flash_change:{brightness_change:.1f}')
-        print(f'flash_saved:$saved_brightness')
+        current_brightness = float(np.mean(gray)) / 255 * 100
+        brightness_change = abs(current_brightness - saved_brightness) / max(saved_brightness, 1) * 100
+        print(f"flash_brightness:{current_brightness:.1f}")
+        print(f"flash_change:{brightness_change:.1f}")
+        print(f"flash_saved:{saved_brightness}")
     else:
-        print('flash_error:no_measurement_possible')
-        
+        print("flash_error:no_measurement_possible")
     cap.release()
-        
 except Exception as e:
-    print(f'flash_error:{e}')
-" > "$temp_log" 2>&1
+    print(f"flash_error:{e}")
+' > "$temp_log" 2>&1
     
     # Parse results
     if [[ -f "$temp_log" ]]; then
