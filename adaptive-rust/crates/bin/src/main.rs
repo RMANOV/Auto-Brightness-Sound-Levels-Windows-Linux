@@ -40,20 +40,28 @@ fn main() -> Result<()> {
     }
 
     // Create and run controller
-    let config = controller::ControllerConfig::default();
+    let auto_exit = std::env::args().any(|a| a == "--auto-exit");
+    let mut config = controller::ControllerConfig::default();
+    config.auto_exit = auto_exit;
     let mut controller = controller::Controller::new(config)?;
 
     info!("Controller initialized, entering main loop");
-    info!("Press Ctrl+C to stop");
+    if auto_exit {
+        info!("Mode: auto-exit (converge & stop)");
+    } else {
+        info!("Press Ctrl+C to stop");
+    }
 
     // Main loop
     while !SHUTDOWN.load(Ordering::SeqCst) {
-        if let Err(e) = controller.tick() {
-            tracing::error!("Controller error: {}", e);
+        match controller.tick() {
+            Ok(true) => break,  // Converged
+            Ok(false) => {}
+            Err(e) => tracing::error!("Controller error: {}", e),
         }
     }
 
-    info!("Shutdown signal received, cleaning up...");
+    info!("Cleaning up...");
     controller.cleanup();
     info!("Cleanup complete, exiting");
 

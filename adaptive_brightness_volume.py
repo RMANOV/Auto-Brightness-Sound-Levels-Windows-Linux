@@ -231,7 +231,8 @@ class AdaptiveBrightnessVolumeController:
     def __init__(self, camera_index: int = 0,
                  lock_exposure: bool = True,
                  brightness_range: Tuple[int, int] = (5, 45),
-                 volume_range: Tuple[int, int] = (3, 35)):
+                 volume_range: Tuple[int, int] = (3, 35),
+                 auto_exit: bool = False):
         self.system = platform.system().lower()
         if self.system not in ["linux", "windows"]:
             print(f"Currently only Linux and Windows are supported. Detected: {self.system}")
@@ -262,6 +263,9 @@ class AdaptiveBrightnessVolumeController:
                 if shutil.which(tool):
                     self.volume_tool = tool
                     break
+
+        # Auto-exit: stop once brightness & volume converge
+        self.auto_exit: bool = auto_exit
 
         # Configuration
         self.camera_index: int = camera_index
@@ -1079,6 +1083,7 @@ class AdaptiveBrightnessVolumeController:
                 time.sleep(self.inactivity_check_interval)
 
     def run(self) -> None:
+        start_time = time.time()
         self.frame_queue = Queue(maxsize=10)
         self.brightness_queue = Queue(maxsize=10)
 
@@ -1091,6 +1096,13 @@ class AdaptiveBrightnessVolumeController:
         last_brightness_change_time = time.time()
         last_perf_report_time = time.time()
         perf_report_interval = 30.0
+
+        # Auto-exit convergence tracking
+        _converge_count = 0
+        _converge_threshold = 1.0  # % delta to consider "stable"
+        _converge_required = 3     # consecutive stable frames to confirm
+        _last_target_brightness = None
+        _last_target_volume = None
 
         try:
             while not self.stop_event.is_set():
@@ -1156,8 +1168,9 @@ class AdaptiveBrightnessVolumeController:
                         if SCREEN_CAPTURE_AVAILABLE:
                             target_brightness = target_brightness * self.screen_brightness_factor
 
-                        if self.is_in_warmup:
+                        if self.is_in_warmup or self.is_audio_in_warmup:
                             self.current_warmup_frame += 1
+                        if self.is_in_warmup:
                             if self.initial_brightness is None:
                                 try:
                                     self.initial_brightness = self.get_brightness()
@@ -1269,6 +1282,27 @@ class AdaptiveBrightnessVolumeController:
                         except Exception as e:
                             print(f"Volume setting error: {e}")
 
+                    # Auto-exit: check convergence after warmup
+                    if self.auto_exit and not self.is_in_warmup:
+                        b_stable = (_last_target_brightness is not None and
+                                    abs(self.smoothed_brightness - _last_target_brightness) < _converge_threshold)
+                        v_stable = (not AUDIO_AVAILABLE or not self.is_audio_in_warmup) and (
+                            not AUDIO_AVAILABLE or (
+                                _last_target_volume is not None and
+                                abs(self.smoothed_volume - _last_target_volume) < _converge_threshold))
+                        if b_stable and v_stable:
+                            _converge_count += 1
+                        else:
+                            _converge_count = 0
+                        _last_target_brightness = target_brightness if camera_brightness is not None else _last_target_brightness
+                        _last_target_volume = target_volume if AUDIO_AVAILABLE else _last_target_volume
+                        if _converge_count >= _converge_required:
+                            elapsed = time.time() - start_time
+                            print(f"\nConverged in {elapsed:.1f}s — "
+                                  f"brightness: {self.smoothed_brightness:.1f}%, "
+                                  f"volume: {self.smoothed_volume:.1f}%")
+                            break
+
                     if current_time - last_brightness_change_time > 10:
                         update_interval = min(update_interval * 1.2, 2.0)
                     else:
@@ -1322,10 +1356,13 @@ if __name__ == '__main__':
         print("  pip install pillow --user     # Alternative method")
         print("\nContinuing without screen content analysis...\n")
 
+    auto_exit = "--auto-exit" in sys.argv
+
     try:
-        controller = AdaptiveBrightnessVolumeController()
+        controller = AdaptiveBrightnessVolumeController(auto_exit=auto_exit)
         print("\nStarting adaptive brightness and volume controller...")
         print(f"Platform: {platform.system()}")
+        print(f"Mode: {'auto-exit (converge & stop)' if auto_exit else 'continuous'}")
         print(f"Brightness range: {controller.min_brightness}% - {controller.max_brightness}%")
         print(f"Volume range: {controller.min_volume}% - {controller.max_volume}%")
         print(f"Brightness control method: {controller.brightness_method}")
@@ -1336,7 +1373,8 @@ if __name__ == '__main__':
             print(f"Audio control: Enabled ({AUDIO_METHOD})")
         else:
             print("Audio control: Disabled")
-        print("\nPress Ctrl+C to stop")
+        if not auto_exit:
+            print("\nPress Ctrl+C to stop")
         controller.run()
     except KeyboardInterrupt:
         print("\nStopping controller...")

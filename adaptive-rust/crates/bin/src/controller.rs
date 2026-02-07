@@ -29,6 +29,7 @@ pub struct ControllerConfig {
     pub volume_smoothing: f32,
     pub update_interval: Duration,
     pub warmup_frames: u32,
+    pub auto_exit: bool,
 }
 
 impl Default for ControllerConfig {
@@ -42,6 +43,7 @@ impl Default for ControllerConfig {
             volume_smoothing: 0.2,
             update_interval: Duration::from_millis(500),
             warmup_frames: 20,
+            auto_exit: false,
         }
     }
 }
@@ -89,6 +91,12 @@ pub struct Controller {
     // Timing
     last_update: Instant,
     last_perf_report: Instant,
+    start_time: Instant,
+
+    // Auto-exit convergence tracking
+    last_target_brightness: Option<f32>,
+    last_target_volume: Option<f32>,
+    converge_count: u32,
 }
 
 impl Controller {
@@ -140,17 +148,21 @@ impl Controller {
             volume_control,
             last_update: Instant::now(),
             last_perf_report: Instant::now(),
+            start_time: Instant::now(),
+            last_target_brightness: None,
+            last_target_volume: None,
+            converge_count: 0,
         })
     }
 
-    /// Process one tick of the controller
-    pub fn tick(&mut self) -> Result<()> {
+    /// Process one tick. Returns true if converged (auto-exit).
+    pub fn tick(&mut self) -> Result<bool> {
         let now = Instant::now();
 
         // Check update interval
         if now.duration_since(self.last_update) < self.config.update_interval {
             thread::sleep(Duration::from_millis(10));
-            return Ok(());
+            return Ok(false);
         }
         self.last_update = now;
 
@@ -160,13 +172,32 @@ impl Controller {
         // Process audio data
         self.process_audio()?;
 
+        // Auto-exit convergence check (after warmup)
+        if self.config.auto_exit && self.warmup_frame >= self.config.warmup_frames {
+            let b_ok = self.last_target_brightness
+                .map_or(false, |t| (self.smoothed_brightness - t).abs() < 1.0);
+            let v_ok = self.last_target_volume
+                .map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0);
+            if b_ok && v_ok {
+                self.converge_count += 1;
+            } else {
+                self.converge_count = 0;
+            }
+            if self.converge_count >= 3 {
+                let elapsed = self.start_time.elapsed().as_secs_f32();
+                info!("Converged in {:.1}s — brightness: {:.1}%, volume: {:.1}%",
+                    elapsed, self.smoothed_brightness, self.smoothed_volume);
+                return Ok(true);
+            }
+        }
+
         // Periodic performance report
         if now.duration_since(self.last_perf_report) > Duration::from_secs(30) {
             self.print_performance_stats();
             self.last_perf_report = now;
         }
 
-        Ok(())
+        Ok(false)
     }
 
     fn process_brightness(&mut self) -> Result<()> {
@@ -203,6 +234,8 @@ impl Controller {
                 self.config.min_brightness,
                 self.config.max_brightness,
             );
+
+            self.last_target_brightness = Some(target);
 
             // Determine smoothing factor
             let time_since_change = self.last_significant_change.elapsed().as_secs_f32();
@@ -259,6 +292,8 @@ impl Controller {
                 self.config.min_volume,
                 self.config.max_volume,
             );
+
+            self.last_target_volume = Some(target);
 
             // Apply smoothing
             self.smoothed_volume = smooth_transition(
