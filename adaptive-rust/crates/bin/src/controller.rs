@@ -43,7 +43,7 @@ impl Default for ControllerConfig {
             volume_smoothing: 0.2,
             update_interval: Duration::from_millis(500),
             warmup_frames: 20,
-            auto_exit: false,
+            auto_exit: true,
         }
     }
 }

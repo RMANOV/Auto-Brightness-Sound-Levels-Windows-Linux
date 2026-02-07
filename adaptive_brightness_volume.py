@@ -232,7 +232,7 @@ class AdaptiveBrightnessVolumeController:
                  lock_exposure: bool = True,
                  brightness_range: Tuple[int, int] = (5, 45),
                  volume_range: Tuple[int, int] = (3, 35),
-                 auto_exit: bool = False):
+                 auto_exit: bool = True):
         self.system = platform.system().lower()
         if self.system not in ["linux", "windows"]:
             print(f"Currently only Linux and Windows are supported. Detected: {self.system}")
@@ -1356,13 +1356,14 @@ if __name__ == '__main__':
         print("  pip install pillow --user     # Alternative method")
         print("\nContinuing without screen content analysis...\n")
 
-    auto_exit = "--auto-exit" in sys.argv
+    continuous = "--continuous" in sys.argv
 
     try:
-        controller = AdaptiveBrightnessVolumeController(auto_exit=auto_exit)
+        controller = AdaptiveBrightnessVolumeController(auto_exit=not continuous)
         print("\nStarting adaptive brightness and volume controller...")
         print(f"Platform: {platform.system()}")
-        print(f"Mode: {'auto-exit (converge & stop)' if auto_exit else 'continuous'}")
+        if continuous:
+            print("Mode: continuous (press Ctrl+C to stop)")
         print(f"Brightness range: {controller.min_brightness}% - {controller.max_brightness}%")
         print(f"Volume range: {controller.min_volume}% - {controller.max_volume}%")
         print(f"Brightness control method: {controller.brightness_method}")
@@ -1373,8 +1374,6 @@ if __name__ == '__main__':
             print(f"Audio control: Enabled ({AUDIO_METHOD})")
         else:
             print("Audio control: Disabled")
-        if not auto_exit:
-            print("\nPress Ctrl+C to stop")
         controller.run()
     except KeyboardInterrupt:
         print("\nStopping controller...")

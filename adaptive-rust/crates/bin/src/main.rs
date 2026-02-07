@@ -40,16 +40,14 @@ fn main() -> Result<()> {
     }
 
     // Create and run controller
-    let auto_exit = std::env::args().any(|a| a == "--auto-exit");
+    let continuous = std::env::args().any(|a| a == "--continuous");
     let mut config = controller::ControllerConfig::default();
-    config.auto_exit = auto_exit;
+    config.auto_exit = !continuous;
     let mut controller = controller::Controller::new(config)?;
 
     info!("Controller initialized, entering main loop");
-    if auto_exit {
-        info!("Mode: auto-exit (converge & stop)");
-    } else {
-        info!("Press Ctrl+C to stop");
+    if continuous {
+        info!("Mode: continuous (Ctrl+C to stop)");
     }
 
     // Main loop
