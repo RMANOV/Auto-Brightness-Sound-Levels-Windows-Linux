@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adaptive-controller"
-version = "0.1.0"
+version = "1.2.0"
 dependencies = [
  "adaptive-core",
  "anyhow",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "adaptive-core"
-version = "0.1.0"
+version = "1.2.0"
 dependencies = [
  "criterion",
  "rayon",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "adaptive-rust"
-version = "0.1.0"
+version = "1.2.0"
 dependencies = [
  "adaptive-core",
  "numpy",

@@ -56,7 +56,7 @@ impl Camera {
     }
 
     /// Capture a frame and return grayscale pixel data
-    pub fn capture_frame(&self) -> Result<Vec<u8>> {
+    pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
         let (buf, _meta) = self.stream.next()?;
 
         // Convert to grayscale based on format

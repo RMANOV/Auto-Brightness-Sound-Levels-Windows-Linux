@@ -166,6 +166,10 @@ impl Controller {
         }
         self.last_update = now;
 
+        // Save previous targets for convergence (compare smoothed vs PREVIOUS target, like Python)
+        let prev_target_b = self.last_target_brightness;
+        let prev_target_v = self.last_target_volume;
+
         // Process brightness data
         self.process_brightness()?;
 
@@ -174,9 +178,9 @@ impl Controller {
 
         // Auto-exit convergence check (after warmup)
         if self.config.auto_exit && self.warmup_frame >= self.config.warmup_frames {
-            let b_ok = self.last_target_brightness
+            let b_ok = prev_target_b
                 .map_or(false, |t| (self.smoothed_brightness - t).abs() < 1.0);
-            let v_ok = self.last_target_volume
+            let v_ok = prev_target_v
                 .map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0);
             if b_ok && v_ok {
                 self.converge_count += 1;
@@ -347,7 +351,7 @@ impl Drop for Controller {
 
 /// Camera worker thread
 fn camera_worker(tx: Sender<FrameData>, shutdown: Arc<Mutex<bool>>) {
-    let camera = match Camera::new(0) {
+    let mut camera = match Camera::new(0) {
         Ok(c) => c,
         Err(e) => {
             warn!("Failed to open camera: {}", e);
