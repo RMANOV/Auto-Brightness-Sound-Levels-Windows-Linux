@@ -8,6 +8,7 @@ pub mod brightness;
 pub mod change;
 pub mod screen;
 pub mod smooth;
+pub mod sun;
 pub mod volume;
 
 pub use audio::compute_noise_level;

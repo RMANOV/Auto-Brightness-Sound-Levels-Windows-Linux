@@ -76,13 +76,6 @@ def comprehensive_cleanup():
 
     try:
         cv2.destroyAllWindows()
-        for i in range(10):
-            try:
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    cap.release()
-            except Exception:
-                break
     except Exception as e:
         print(f"Warning: OpenCV cleanup issue: {e}")
 
@@ -296,6 +289,20 @@ class AdaptiveBrightnessVolumeController:
         global _controller_instance
         _controller_instance = self
         register_cleanup(self._instance_cleanup)
+
+        # Sun-aware seasonal adaptation (NOAA algorithm)
+        self.sun_window = None
+        try:
+            from sunrise_sunset_calculator import SunCalculator
+            calc = SunCalculator()
+            active, window = calc.is_in_active_window()
+            self.sun_window = window if active else None
+            if self.sun_window:
+                times = calc.calculate_sun_times()
+                print(f"Sun-aware mode: {self.sun_window} window "
+                      f"(sunrise={times['sunrise']}, sunset={times['sunset']})")
+        except Exception:
+            pass
 
     def _instance_cleanup(self):
         """Instance-specific cleanup method"""
@@ -1191,7 +1198,8 @@ class AdaptiveBrightnessVolumeController:
                                 print("Calibration complete, applying normal brightness control")
                                 self.prev_camera_brightness = camera_brightness
                         else:
-                            smooth_factor = self.brightness_smoothing_factor * adjustment_boost
+                            sun_boost = 1.5 if self.sun_window else 1.0
+                            smooth_factor = self.brightness_smoothing_factor * adjustment_boost * sun_boost
                             old_brightness = self.smoothed_brightness
                             self.smoothed_brightness = self._smooth_transition_jit(
                                 self.smoothed_brightness,
@@ -1262,10 +1270,11 @@ class AdaptiveBrightnessVolumeController:
                                 volume_change = self.smoothed_volume - old_volume
                         else:
                             old_volume = self.smoothed_volume
+                            vol_sun_boost = 1.5 if self.sun_window else 1.0
                             self.smoothed_volume = self._smooth_transition_jit(
                                 self.smoothed_volume,
                                 target_volume,
-                                self.volume_smoothing_factor
+                                self.volume_smoothing_factor * vol_sun_boost
                             )
                             volume_change = self.smoothed_volume - old_volume
 
@@ -1298,7 +1307,8 @@ class AdaptiveBrightnessVolumeController:
                         _last_target_volume = target_volume if AUDIO_AVAILABLE else _last_target_volume
                         if _converge_count >= _converge_required:
                             elapsed = time.time() - start_time
-                            print(f"\nConverged in {elapsed:.1f}s — "
+                            window_info = f" ({self.sun_window} window)" if self.sun_window else ""
+                            print(f"\nConverged in {elapsed:.1f}s{window_info} — "
                                   f"brightness: {self.smoothed_brightness:.1f}%, "
                                   f"volume: {self.smoothed_volume:.1f}%")
                             break

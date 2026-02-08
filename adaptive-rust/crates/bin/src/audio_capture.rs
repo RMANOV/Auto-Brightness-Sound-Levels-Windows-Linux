@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig};
+use cpal::{Device, StreamConfig};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,7 +51,7 @@ impl AudioCapture {
         let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(expected_samples)));
         let samples_clone = Arc::clone(&samples);
         let done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-        let done_clone = Arc::clone(&done);
+        let _done = done;
 
         let err_fn = |err| warn!("Audio stream error: {}", err);
 
@@ -89,19 +89,6 @@ impl AudioCapture {
     }
 }
 
-/// Fallback audio capture using system tools
-pub struct FallbackAudioCapture;
-
-impl FallbackAudioCapture {
-    pub fn new() -> Result<Self> {
-        Ok(Self)
-    }
-
-    pub fn capture_samples(&self, _duration: Duration) -> Result<Vec<f32>> {
-        // Return silent samples for testing
-        Ok(vec![0.0; 4410])
-    }
-}
 
 #[cfg(test)]
 mod tests {

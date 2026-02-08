@@ -8,7 +8,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/adaptive_brightness_volume.py"
 RUST_BINARY="$SCRIPT_DIR/adaptive-rust/target/release/adaptive-controller"
-USE_RUST=false
+USE_RUST=""
 LOCK_FILE="/tmp/adaptive_controller.lock"
 LOG_FILE="/tmp/adaptive_controller.log"
 PID_FILE="/tmp/adaptive_controller.pid"

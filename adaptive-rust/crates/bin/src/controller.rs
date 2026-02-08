@@ -6,12 +6,13 @@ use adaptive_core::{
     calculate_brightness, calculate_brightness_mapping, calculate_volume_mapping,
     check_significant_change, compute_noise_level, smooth_transition,
 };
+use adaptive_core::sun::SunWindow;
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 use crate::audio_capture::AudioCapture;
@@ -51,13 +52,11 @@ impl Default for ControllerConfig {
 /// Frame data from camera
 pub struct FrameData {
     pub brightness: f32,
-    pub timestamp: Instant,
 }
 
 /// Audio data from capture
 pub struct AudioData {
     pub noise_level: f32,
-    pub timestamp: Instant,
 }
 
 /// Main controller
@@ -97,6 +96,9 @@ pub struct Controller {
     last_target_brightness: Option<f32>,
     last_target_volume: Option<f32>,
     converge_count: u32,
+
+    // Sun-aware seasonal adaptation
+    sun_window: Option<SunWindow>,
 }
 
 impl Controller {
@@ -117,6 +119,12 @@ impl Controller {
 
         info!("Initial brightness: {}%", current_brightness);
         info!("Initial volume: {}%", current_volume);
+
+        // Detect sun window for seasonal adaptation (NOAA algorithm)
+        let sun_window = detect_sun_window_now();
+        if let Some(ref w) = sun_window {
+            info!("Sun-aware mode: {:?} window — accelerated adaptation", w);
+        }
 
         // Spawn camera thread
         let shutdown_clone = Arc::clone(&shutdown);
@@ -152,6 +160,7 @@ impl Controller {
             last_target_brightness: None,
             last_target_volume: None,
             converge_count: 0,
+            sun_window,
         })
     }
 
@@ -189,8 +198,10 @@ impl Controller {
             }
             if self.converge_count >= 3 {
                 let elapsed = self.start_time.elapsed().as_secs_f32();
-                info!("Converged in {:.1}s — brightness: {:.1}%, volume: {:.1}%",
-                    elapsed, self.smoothed_brightness, self.smoothed_volume);
+                let window_info = self.sun_window
+                    .map_or(String::new(), |w| format!(" ({:?} window)", w));
+                info!("Converged in {:.1}s{} — brightness: {:.1}%, volume: {:.1}%",
+                    elapsed, window_info, self.smoothed_brightness, self.smoothed_volume);
                 return Ok(true);
             }
         }
@@ -241,15 +252,16 @@ impl Controller {
 
             self.last_target_brightness = Some(target);
 
-            // Determine smoothing factor
+            // Determine smoothing factor (sun-aware: 1.5x boost during sunrise/sunset)
             let time_since_change = self.last_significant_change.elapsed().as_secs_f32();
+            let sun_boost = if self.sun_window.is_some() { 1.5 } else { 1.0 };
             let smooth_factor = if self.warmup_frame < self.config.warmup_frames {
                 self.warmup_frame += 1;
                 self.config.brightness_smoothing * 0.05
             } else if time_since_change < 5.0 {
-                self.config.brightness_smoothing * 2.0
+                self.config.brightness_smoothing * 2.0 * sun_boost
             } else {
-                self.config.brightness_smoothing
+                self.config.brightness_smoothing * sun_boost
             };
 
             // Apply smoothing
@@ -299,11 +311,13 @@ impl Controller {
 
             self.last_target_volume = Some(target);
 
-            // Apply smoothing
+            // Apply smoothing (sun-aware boost during sunrise/sunset)
+            let vol_smooth = self.config.volume_smoothing
+                * if self.sun_window.is_some() { 1.5 } else { 1.0 };
             self.smoothed_volume = smooth_transition(
                 self.smoothed_volume,
                 target,
-                self.config.volume_smoothing,
+                vol_smooth,
             ).clamp(self.config.min_volume, self.config.max_volume);
 
             // Apply if changed
@@ -365,10 +379,7 @@ fn camera_worker(tx: Sender<FrameData>, shutdown: Arc<Mutex<bool>>) {
         match camera.capture_frame() {
             Ok(frame) => {
                 let brightness = calculate_brightness(&frame);
-                let data = FrameData {
-                    brightness,
-                    timestamp: Instant::now(),
-                };
+                let data = FrameData { brightness };
                 if tx.send(data).is_err() {
                     break;
                 }
@@ -399,10 +410,7 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
         match capture.capture_samples(Duration::from_millis(100)) {
             Ok(samples) => {
                 let noise_level = compute_noise_level(&samples);
-                let data = AudioData {
-                    noise_level,
-                    timestamp: Instant::now(),
-                };
+                let data = AudioData { noise_level };
                 if tx.send(data).is_err() {
                     break;
                 }
@@ -415,4 +423,50 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
     }
 
     info!("Audio worker stopped");
+}
+
+/// Detect current sun window from location config + system time (NOAA algorithm)
+fn detect_sun_window_now() -> Option<SunWindow> {
+    let home = std::env::var("HOME").ok()?;
+    let content = std::fs::read_to_string(
+        format!("{}/.config/adaptive-controller/location.conf", home),
+    ).ok()?;
+
+    let lat = extract_json_f64(&content, "latitude")?;
+    let lon = extract_json_f64(&content, "longitude")?;
+    let tz = extract_json_f64(&content, "timezone_offset")?;
+
+    let unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
+    let local = unix + (tz * 3600.0) as i64;
+    let current_min = local.rem_euclid(86400) as f64 / 60.0;
+    let (year, month, day) = civil_from_days(local.div_euclid(86400));
+
+    adaptive_core::sun::detect_sun_window(current_min, lat, lon, tz, year, month, day)
+}
+
+/// Extract a float value from simple JSON by key name
+fn extract_json_f64(json: &str, key: &str) -> Option<f64> {
+    let needle = format!("\"{}\"", key);
+    let pos = json.find(&needle)? + needle.len();
+    let rest = &json[pos..];
+    let colon = rest.find(':')?;
+    let after = rest[colon + 1..].trim_start();
+    let end = after.find(|c: char| c == ',' || c == '}' || c == '\n')
+        .unwrap_or(after.len());
+    after[..end].trim().parse().ok()
+}
+
+/// Convert days since Unix epoch to (year, month, day) — Howard Hinnant's algorithm
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    (year as i32, m as u32, d as u32)
 }
