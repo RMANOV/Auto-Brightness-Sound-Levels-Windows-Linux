@@ -389,13 +389,17 @@ fn camera_worker(tx: Sender<FrameData>, shutdown: Arc<Mutex<bool>>) {
                 debug!("Frame capture error: {}", e);
             }
         }
-        thread::sleep(Duration::from_millis(100));
+        // Sun position changes slowly — 2s between samples is plenty
+        thread::sleep(Duration::from_secs(2));
     }
 
     info!("Camera worker stopped");
 }
 
 /// Audio worker thread
+///
+/// Samples ambient noise for 200ms every 5 seconds.
+/// Microphone is OFF ~96% of the time (privacy + battery).
 fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
     let capture = match AudioCapture::new() {
         Ok(c) => c,
@@ -405,10 +409,10 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
         }
     };
 
-    info!("Audio worker started");
+    info!("Audio worker started (sampling 200ms every 5s)");
 
     while !*shutdown.lock() {
-        match capture.capture_samples(Duration::from_millis(100)) {
+        match capture.capture_samples(Duration::from_millis(200)) {
             Ok(samples) => {
                 let noise_level = compute_noise_level(&samples);
                 let data = AudioData { noise_level };
@@ -420,7 +424,8 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
                 debug!("Audio capture error: {}", e);
             }
         }
-        thread::sleep(Duration::from_millis(50));
+        // Microphone OFF for 5 seconds between samples
+        thread::sleep(Duration::from_secs(5));
     }
 
     info!("Audio worker stopped");
