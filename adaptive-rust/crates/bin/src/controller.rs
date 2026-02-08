@@ -1,12 +1,12 @@
 //! Main controller implementation
 //!
-//! Coordinates camera capture, audio analysis, and system control.
+//! Coordinates camera/sun capture, audio analysis, and system control.
 
+use adaptive_core::sun::SunWindow;
 use adaptive_core::{
     calculate_brightness, calculate_brightness_mapping, calculate_volume_mapping,
     check_significant_change, compute_noise_level, smooth_transition,
 };
-use adaptive_core::sun::SunWindow;
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use parking_lot::Mutex;
@@ -18,6 +18,11 @@ use tracing::{debug, info, warn};
 use crate::audio_capture::AudioCapture;
 use crate::camera::Camera;
 use crate::system::{BrightnessControl, VolumeControl};
+
+/// Sofia, Bulgaria
+const LATITUDE: f64 = 42.6977;
+const LONGITUDE: f64 = 23.3219;
+const TIMEZONE_OFFSET: f64 = 2.0;
 
 /// Controller configuration
 #[derive(Clone)]
@@ -49,7 +54,7 @@ impl Default for ControllerConfig {
     }
 }
 
-/// Frame data from camera
+/// Frame data from camera / sun-position
 pub struct FrameData {
     pub brightness: f32,
 }
@@ -124,9 +129,11 @@ impl Controller {
         let sun_window = detect_sun_window_now();
         if let Some(ref w) = sun_window {
             info!("Sun-aware mode: {:?} window — accelerated adaptation", w);
+        } else {
+            info!("Outside sunrise/sunset window — normal mode");
         }
 
-        // Spawn camera thread
+        // Spawn camera thread (sun-position based on Windows)
         let shutdown_clone = Arc::clone(&shutdown);
         let camera_thread = Some(thread::spawn(move || {
             camera_worker(brightness_tx, shutdown_clone);
@@ -168,29 +175,22 @@ impl Controller {
     pub fn tick(&mut self) -> Result<bool> {
         let now = Instant::now();
 
-        // Check update interval
         if now.duration_since(self.last_update) < self.config.update_interval {
             thread::sleep(Duration::from_millis(10));
             return Ok(false);
         }
         self.last_update = now;
 
-        // Save previous targets for convergence (compare smoothed vs PREVIOUS target, like Python)
         let prev_target_b = self.last_target_brightness;
         let prev_target_v = self.last_target_volume;
 
-        // Process brightness data
         self.process_brightness()?;
-
-        // Process audio data
         self.process_audio()?;
 
         // Auto-exit convergence check (after warmup)
         if self.config.auto_exit && self.warmup_frame >= self.config.warmup_frames {
-            let b_ok = prev_target_b
-                .map_or(false, |t| (self.smoothed_brightness - t).abs() < 1.0);
-            let v_ok = prev_target_v
-                .map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0);
+            let b_ok = prev_target_b.map_or(false, |t| (self.smoothed_brightness - t).abs() < 1.0);
+            let v_ok = prev_target_v.map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0);
             if b_ok && v_ok {
                 self.converge_count += 1;
             } else {
@@ -198,10 +198,13 @@ impl Controller {
             }
             if self.converge_count >= 3 {
                 let elapsed = self.start_time.elapsed().as_secs_f32();
-                let window_info = self.sun_window
+                let window_info = self
+                    .sun_window
                     .map_or(String::new(), |w| format!(" ({:?} window)", w));
-                info!("Converged in {:.1}s{} — brightness: {:.1}%, volume: {:.1}%",
-                    elapsed, window_info, self.smoothed_brightness, self.smoothed_volume);
+                info!(
+                    "Converged in {:.1}s{} — brightness: {:.1}%, volume: {:.1}%",
+                    elapsed, window_info, self.smoothed_brightness, self.smoothed_volume
+                );
                 return Ok(true);
             }
         }
@@ -216,7 +219,6 @@ impl Controller {
     }
 
     fn process_brightness(&mut self) -> Result<()> {
-        // Try to get latest brightness reading
         let mut latest: Option<FrameData> = None;
         loop {
             match self.brightness_rx.try_recv() {
@@ -232,18 +234,19 @@ impl Controller {
         if let Some(frame_data) = latest {
             let camera_brightness = frame_data.brightness;
 
-            // Check for significant change
             if let Some(last) = self.last_camera_brightness {
                 let is_dimming = camera_brightness < last;
                 if check_significant_change(camera_brightness, last, is_dimming) {
                     self.last_significant_change = Instant::now();
                     let direction = if is_dimming { "DIMMING" } else { "BRIGHTENING" };
-                    info!("Light change: {} {:.1} -> {:.1}", direction, last, camera_brightness);
+                    info!(
+                        "Light change: {} {:.1} -> {:.1}",
+                        direction, last, camera_brightness
+                    );
                 }
             }
             self.last_camera_brightness = Some(camera_brightness);
 
-            // Calculate target brightness
             let target = calculate_brightness_mapping(
                 camera_brightness,
                 self.config.min_brightness,
@@ -252,9 +255,12 @@ impl Controller {
 
             self.last_target_brightness = Some(target);
 
-            // Determine smoothing factor (sun-aware: 1.5x boost during sunrise/sunset)
             let time_since_change = self.last_significant_change.elapsed().as_secs_f32();
-            let sun_boost = if self.sun_window.is_some() { 1.5 } else { 1.0 };
+            let sun_boost = if self.sun_window.is_some() {
+                1.5
+            } else {
+                1.0
+            };
             let smooth_factor = if self.warmup_frame < self.config.warmup_frames {
                 self.warmup_frame += 1;
                 self.config.brightness_smoothing * 0.05
@@ -264,18 +270,19 @@ impl Controller {
                 self.config.brightness_smoothing * sun_boost
             };
 
-            // Apply smoothing
             self.smoothed_brightness = smooth_transition(
                 self.smoothed_brightness,
                 target,
                 smooth_factor,
-            ).clamp(self.config.min_brightness, self.config.max_brightness);
+            )
+            .clamp(self.config.min_brightness, self.config.max_brightness);
 
-            // Apply if changed significantly
             let new_brightness = self.smoothed_brightness.round();
             if (new_brightness - self.current_brightness).abs() >= 1.0 {
-                debug!("Setting brightness: {:.1}% -> {:.1}%",
-                    self.current_brightness, new_brightness);
+                debug!(
+                    "Setting brightness: {:.1}% -> {:.1}%",
+                    self.current_brightness, new_brightness
+                );
                 self.brightness_control.set(new_brightness as i32)?;
                 self.current_brightness = new_brightness;
             }
@@ -285,7 +292,6 @@ impl Controller {
     }
 
     fn process_audio(&mut self) -> Result<()> {
-        // Try to get latest audio reading
         let mut latest: Option<AudioData> = None;
         loop {
             match self.audio_rx.try_recv() {
@@ -296,13 +302,11 @@ impl Controller {
         }
 
         if let Some(audio_data) = latest {
-            // Normalize noise level
             const MIN_NOISE: f32 = 5e-6;
             const MAX_NOISE: f32 = 8e-3;
             let normalized = ((audio_data.noise_level - MIN_NOISE) / (MAX_NOISE - MIN_NOISE))
                 .clamp(0.0, 1.0);
 
-            // Calculate target volume
             let target = calculate_volume_mapping(
                 normalized,
                 self.config.min_volume,
@@ -311,20 +315,17 @@ impl Controller {
 
             self.last_target_volume = Some(target);
 
-            // Apply smoothing (sun-aware boost during sunrise/sunset)
             let vol_smooth = self.config.volume_smoothing
                 * if self.sun_window.is_some() { 1.5 } else { 1.0 };
-            self.smoothed_volume = smooth_transition(
-                self.smoothed_volume,
-                target,
-                vol_smooth,
-            ).clamp(self.config.min_volume, self.config.max_volume);
+            self.smoothed_volume = smooth_transition(self.smoothed_volume, target, vol_smooth)
+                .clamp(self.config.min_volume, self.config.max_volume);
 
-            // Apply if changed
             let new_volume = self.smoothed_volume.round();
             if (new_volume - self.current_volume).abs() >= 1.0 {
-                debug!("Setting volume: {:.1}% -> {:.1}%",
-                    self.current_volume, new_volume);
+                debug!(
+                    "Setting volume: {:.1}% -> {:.1}%",
+                    self.current_volume, new_volume
+                );
                 self.volume_control.set(new_volume as i32)?;
                 self.current_volume = new_volume;
             }
@@ -334,18 +335,18 @@ impl Controller {
     }
 
     fn print_performance_stats(&self) {
-        info!("Performance: brightness={:.1}%, volume={:.1}%",
-            self.current_brightness, self.current_volume);
+        info!(
+            "Status: brightness={:.1}%, volume={:.1}%, uptime={:.0}s",
+            self.current_brightness,
+            self.current_volume,
+            self.start_time.elapsed().as_secs_f32()
+        );
     }
 
-    /// Cleanup resources
     pub fn cleanup(&mut self) {
         info!("Cleaning up controller...");
-
-        // Signal shutdown
         *self.shutdown.lock() = true;
 
-        // Wait for threads
         if let Some(handle) = self.camera_thread.take() {
             let _ = handle.join();
         }
@@ -368,7 +369,7 @@ fn camera_worker(tx: Sender<FrameData>, shutdown: Arc<Mutex<bool>>) {
     let mut camera = match Camera::new(0) {
         Ok(c) => c,
         Err(e) => {
-            warn!("Failed to open camera: {}", e);
+            warn!("Failed to initialize ambient light source: {}", e);
             return;
         }
     };
@@ -425,38 +426,44 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
     info!("Audio worker stopped");
 }
 
-/// Detect current sun window from location config + system time (NOAA algorithm)
+/// Detect current sun window using hardcoded Sofia coordinates + NOAA algorithm
 fn detect_sun_window_now() -> Option<SunWindow> {
-    let home = std::env::var("HOME").ok()?;
-    let content = std::fs::read_to_string(
-        format!("{}/.config/adaptive-controller/location.conf", home),
-    ).ok()?;
-
-    let lat = extract_json_f64(&content, "latitude")?;
-    let lon = extract_json_f64(&content, "longitude")?;
-    let tz = extract_json_f64(&content, "timezone_offset")?;
-
-    let unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
-    let local = unix + (tz * 3600.0) as i64;
+    let unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let local = unix + (TIMEZONE_OFFSET * 3600.0) as i64;
     let current_min = local.rem_euclid(86400) as f64 / 60.0;
     let (year, month, day) = civil_from_days(local.div_euclid(86400));
 
-    adaptive_core::sun::detect_sun_window(current_min, lat, lon, tz, year, month, day)
+    let (sunrise, sunset) = adaptive_core::sun::calculate_sun_times(
+        LATITUDE,
+        LONGITUDE,
+        TIMEZONE_OFFSET,
+        year,
+        month,
+        day,
+    );
+
+    info!(
+        "Today: sunrise {:02}:{:02}, sunset {:02}:{:02} (Sofia)",
+        (sunrise / 60.0) as u32,
+        (sunrise % 60.0) as u32,
+        (sunset / 60.0) as u32,
+        (sunset % 60.0) as u32
+    );
+    info!(
+        "Current time: {:02}:{:02}",
+        (current_min / 60.0) as u32,
+        (current_min % 60.0) as u32
+    );
+
+    adaptive_core::sun::detect_sun_window(
+        current_min, LATITUDE, LONGITUDE, TIMEZONE_OFFSET, year, month, day,
+    )
 }
 
-/// Extract a float value from simple JSON by key name
-fn extract_json_f64(json: &str, key: &str) -> Option<f64> {
-    let needle = format!("\"{}\"", key);
-    let pos = json.find(&needle)? + needle.len();
-    let rest = &json[pos..];
-    let colon = rest.find(':')?;
-    let after = rest[colon + 1..].trim_start();
-    let end = after.find(|c: char| c == ',' || c == '}' || c == '\n')
-        .unwrap_or(after.len());
-    after[..end].trim().parse().ok()
-}
-
-/// Convert days since Unix epoch to (year, month, day) — Howard Hinnant's algorithm
+/// Howard Hinnant's algorithm: days since Unix epoch → (year, month, day)
 fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;

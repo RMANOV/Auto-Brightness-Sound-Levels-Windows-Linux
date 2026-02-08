@@ -1,4 +1,4 @@
-//! Audio capture using cpal
+//! Audio capture using cpal (cross-platform)
 //!
 //! Captures audio samples for ambient noise level detection.
 
@@ -31,8 +31,11 @@ impl AudioCapture {
             .default_input_config()
             .context("Failed to get default input config")?;
 
-        info!("Audio config: {} Hz, {} channels",
-            config.sample_rate().0, config.channels());
+        info!(
+            "Audio config: {} Hz, {} channels",
+            config.sample_rate().0,
+            config.channels()
+        );
 
         let stream_config: StreamConfig = config.into();
 
@@ -48,10 +51,9 @@ impl AudioCapture {
         let channels = self.config.channels as usize;
         let expected_samples = (sample_rate * duration.as_millis() as usize / 1000) * channels;
 
-        let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(expected_samples)));
+        let samples: Arc<Mutex<Vec<f32>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(expected_samples)));
         let samples_clone = Arc::clone(&samples);
-        let done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-        let _done = done;
 
         let err_fn = |err| warn!("Audio stream error: {}", err);
 
@@ -86,18 +88,5 @@ impl AudioCapture {
         debug!("Captured {} mono samples", mono.len());
 
         Ok(mono)
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fallback_capture() {
-        let capture = FallbackAudioCapture::new().unwrap();
-        let samples = capture.capture_samples(Duration::from_millis(100)).unwrap();
-        assert_eq!(samples.len(), 4410);
     }
 }

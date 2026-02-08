@@ -1,25 +1,19 @@
 //! Standalone Adaptive Brightness/Volume Controller
 //!
-//! High-performance native implementation with lock-free channels.
+//! Cross-platform implementation with lock-free channels.
+//! Windows: sun-position ambient light + WMI brightness + Core Audio volume
+//! Linux: v4l2 camera + brightnessctl + amixer
 
-mod camera;
 mod audio_capture;
+mod camera;
 mod controller;
 mod system;
 
 use anyhow::Result;
-use nix::sys::signal::{self, Signal, SigHandler};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
-
-/// Global shutdown flag for signal handling
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
-/// Signal handler for graceful shutdown
-extern "C" fn handle_signal(_: i32) {
-    SHUTDOWN.store(true, Ordering::SeqCst);
-}
 
 fn main() -> Result<()> {
     // Initialize logging
@@ -30,20 +24,25 @@ fn main() -> Result<()> {
         .compact()
         .init();
 
-    info!("Adaptive Brightness/Volume Controller v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Adaptive Brightness/Volume Controller v{}",
+        env!("CARGO_PKG_VERSION")
+    );
+    info!("Platform: {}", std::env::consts::OS);
     info!("Starting up...");
 
-    // Setup signal handlers
-    unsafe {
-        signal::signal(Signal::SIGTERM, SigHandler::Handler(handle_signal))?;
-        signal::signal(Signal::SIGINT, SigHandler::Handler(handle_signal))?;
-    }
+    // Setup cross-platform signal handler
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+    ctrlc::set_handler(move || {
+        shutdown_clone.store(true, Ordering::SeqCst);
+    })?;
 
     // Create and run controller
     let continuous = std::env::args().any(|a| a == "--continuous");
     let mut config = controller::ControllerConfig::default();
     config.auto_exit = !continuous;
-    let mut controller = controller::Controller::new(config)?;
+    let mut ctrl = controller::Controller::new(config)?;
 
     info!("Controller initialized, entering main loop");
     if continuous {
@@ -51,16 +50,16 @@ fn main() -> Result<()> {
     }
 
     // Main loop
-    while !SHUTDOWN.load(Ordering::SeqCst) {
-        match controller.tick() {
-            Ok(true) => break,  // Converged
+    while !shutdown.load(Ordering::SeqCst) {
+        match ctrl.tick() {
+            Ok(true) => break, // Converged
             Ok(false) => {}
             Err(e) => tracing::error!("Controller error: {}", e),
         }
     }
 
     info!("Cleaning up...");
-    controller.cleanup();
+    ctrl.cleanup();
     info!("Cleanup complete, exiting");
 
     Ok(())
