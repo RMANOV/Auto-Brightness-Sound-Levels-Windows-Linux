@@ -3526,6 +3526,227 @@ class FractalTree:
         return edges
 
 
+class MathJellyfish:
+    """Bioluminescent mathematical jellyfish made of parametric curves."""
+    name = "Math Jellyfish"
+    num_lines = 600
+
+    # Tentacle configuration — precomputed at init for performance
+    _NUM_TENTACLES = 12
+    _TENTACLE_SEGMENTS = 28
+    _NUM_ORAL = 4
+    _ORAL_SEGMENTS = 15
+    _BELL_ARCS = 8
+    _ARC_SEGMENTS = 20
+
+    def __init__(self):
+        self.time = 0.0
+        self.hue_offset = 0.0
+
+        # Jellyfish position — starts roughly centered
+        self.cx = 0.0          # will be set relative to width in get_edges
+        self.cy = 0.0          # will be set relative to height in get_edges
+        self._cx_init = False  # flag to initialize position on first call
+
+        # Per-tentacle parameters (randomised once, fixed across frames)
+        rng = random.Random(42)  # deterministic seed for reproducibility
+        self._tentacle_freq = [rng.uniform(1.5, 3.0) for _ in range(self._NUM_TENTACLES)]
+        self._tentacle_wave_speed = [rng.uniform(2.5, 4.5) for _ in range(self._NUM_TENTACLES)]
+        self._tentacle_base_amp = [rng.uniform(0.5, 1.2) for _ in range(self._NUM_TENTACLES)]
+
+        # Per-oral-arm parameters
+        self._oral_freq = [rng.uniform(1.0, 1.8) for _ in range(self._NUM_ORAL)]
+        self._oral_wave_speed = [rng.uniform(1.2, 2.0) for _ in range(self._NUM_ORAL)]
+
+    def update(self):
+        self.time += 1.0 / 30.0   # 30 fps → seconds
+        self.hue_offset += CONFIG['color_cycle_speed']
+
+    def _bell_radius(self, base_r):
+        """Pulsing bell radius — contracts and expands rhythmically."""
+        pulse = math.sin(self.time * 1.5) * 0.12  # ±12 % oscillation
+        return base_r * (1.0 + pulse)
+
+    def _tentacle_points(self, anchor_x, anchor_y, tentacle_idx,
+                         seg_count, seg_spacing, base_amplitude,
+                         freq, wave_speed, bell_pulse_factor):
+        """Return list of (x, y) points for one tentacle chain."""
+        points = [(anchor_x, anchor_y)]
+        x, y = anchor_x, anchor_y
+        t = self.time
+        phase = (tentacle_idx / max(self._NUM_TENTACLES, 1)) * 2.0 * math.pi
+
+        for s in range(1, seg_count + 1):
+            frac = s / seg_count          # 0 → 1 from base to tip
+            # Amplitude grows towards tip; bell contraction spreads tentacles
+            amp = base_amplitude * (0.4 + frac * 1.6) * (1.0 + bell_pulse_factor * 0.3)
+            dx = amp * math.sin(freq * s * 0.35 + phase + t * wave_speed)
+            # Secondary wiggle for organic feel
+            dx += (amp * 0.25) * math.sin(freq * 1.7 * s * 0.35 + phase + t * wave_speed * 1.3 + 1.0)
+            dy = seg_spacing
+            x += dx
+            y += dy
+            points.append((x, y))
+        return points
+
+    def get_edges(self, width, height):
+        edges = []
+        t = self.time
+
+        # Initialise position on first call
+        if not self._cx_init:
+            self.cx = width / 2.0
+            self.cy = height / 2.0
+            self._cx_init = True
+
+        # Pulse-driven propulsion — bell contraction thrusts upward
+        pulse = math.sin(t * 1.5)
+        thrust = max(0, -pulse)  # positive only when contracting
+        self.cy -= 0.15 + thrust * 1.8  # gentle drift + strong pulse thrust
+        # Horizontal sway driven by pulse impulse (lateral kick from contractions)
+        pulse_kick = math.cos(t * 1.5) * 0.9
+        self.cx += pulse_kick * math.sin(t * 0.13)
+
+        # Wrap: when jellyfish drifts fully off the top, reappear at bottom
+        base_r = min(width, height) * 0.18
+        br = self._bell_radius(base_r)
+        if self.cy < -br * 2.0:
+            self.cy = height + br
+
+        # Keep horizontal within screen with gentle bounce
+        if self.cx < width * 0.1:
+            self.cx = width * 0.1
+        elif self.cx > width * 0.9:
+            self.cx = width * 0.9
+
+        cx, cy = self.cx, self.cy
+        bell_cy = cy - br * 0.3   # bell center slightly above drift point
+
+        # Bell pulse factor (positive when contracting)
+        bell_pulse_factor = -math.sin(t * 1.5)   # in phase with pulse
+
+        # ------------------------------------------------------------------ #
+        # 1. BELL ARCS — semi-circular dome, 8 concentric arcs               #
+        # ------------------------------------------------------------------ #
+        arc_r_min = br * 0.30
+        arc_r_max = br * 1.00
+
+        for arc_i in range(self._BELL_ARCS):
+            frac = arc_i / max(self._BELL_ARCS - 1, 1)   # 0 … 1
+            r = arc_r_min + frac * (arc_r_max - arc_r_min)
+
+            # Hue: inner arcs more cyan, outer more blue
+            hue = (0.55 + frac * 0.10 + self.hue_offset) % 1.0
+            sat = 0.55 + frac * 0.20
+            val = 0.95 - frac * 0.10   # outer arcs slightly dimmer
+
+            # θ spans upper semi-circle [0.1π … 0.9π]
+            theta_start = 0.10 * math.pi
+            theta_end   = 0.90 * math.pi
+            n = self._ARC_SEGMENTS
+
+            prev_x = cx + r * math.cos(theta_start)
+            prev_y = bell_cy - r * math.sin(theta_start)
+
+            for seg in range(1, n + 1):
+                theta = theta_start + (theta_end - theta_start) * seg / n
+                nx = cx + r * math.cos(theta)
+                ny = bell_cy - r * math.sin(theta)
+
+                # Undulating rim for living texture — only on the outermost arc
+                if arc_i == self._BELL_ARCS - 1:
+                    ripple = br * 0.03 * math.sin(8 * theta + t * 3.0)
+                    prev_x_r = prev_x + ripple * math.cos(theta - 0.5 * math.pi)
+                    prev_y_r = prev_y + ripple * math.sin(theta - 0.5 * math.pi)
+                    nx_r = nx + ripple * math.cos(theta - 0.5 * math.pi)
+                    ny_r = ny + ripple * math.sin(theta - 0.5 * math.pi)
+                    color = hsv_to_hex(hue, sat, val)
+                    lw = 1.5 if arc_i < self._BELL_ARCS - 2 else 2.0
+                    edges.append((prev_x_r, prev_y_r, nx_r, ny_r, color, lw))
+                    prev_x, prev_y = nx, ny
+                else:
+                    color = hsv_to_hex(hue, sat, val)
+                    lw = 1.5 if arc_i < self._BELL_ARCS - 2 else 2.0
+                    edges.append((prev_x, prev_y, nx, ny, color, lw))
+                    prev_x, prev_y = nx, ny
+
+        # ------------------------------------------------------------------ #
+        # 2. OUTER TENTACLES — 12 from the bell's lower rim                  #
+        # ------------------------------------------------------------------ #
+        seg_spacing = br * 0.14   # vertical step per segment
+        num_t = self._NUM_TENTACLES
+
+        for ti in range(num_t):
+            # Anchor points evenly spaced along bottom of bell (θ from 0 to π)
+            angle = math.pi * (ti + 0.5) / num_t   # [~8°..~172°] spread
+            anchor_x = cx + br * math.cos(math.pi - angle)
+            anchor_y = bell_cy + br * math.sin(angle) * 0.4  # flatten spread
+
+            freq = self._tentacle_freq[ti]
+            wave_speed = self._tentacle_wave_speed[ti]
+            base_amp = self._tentacle_base_amp[ti] * br * 0.06
+
+            pts = self._tentacle_points(
+                anchor_x, anchor_y, ti,
+                self._TENTACLE_SEGMENTS, seg_spacing,
+                base_amp, freq, wave_speed, bell_pulse_factor
+            )
+
+            for seg in range(len(pts) - 1):
+                frac = seg / max(self._TENTACLE_SEGMENTS - 1, 1)  # 0=base 1=tip
+                # Hue shifts from cyan at base to blue-violet at tips
+                hue = (0.55 + frac * 0.15 + self.hue_offset) % 1.0
+                sat = 0.70 + frac * 0.20
+                val = 0.90 - frac * 0.60   # bright base → dim tip
+                val = max(0.05, val)
+                color = hsv_to_hex(hue, sat, val)
+                lw = 2.0 - frac * 1.0   # 2px at base → 1px at tip
+                lw = max(1.0, lw)
+
+                x1, y1 = pts[seg]
+                x2, y2 = pts[seg + 1]
+                edges.append((x1, y1, x2, y2, color, lw))
+
+        # ------------------------------------------------------------------ #
+        # 3. ORAL ARMS — 4 thicker, shorter tentacles from bell center       #
+        # ------------------------------------------------------------------ #
+        num_o = self._NUM_ORAL
+        oral_seg_spacing = br * 0.16
+        oral_base_amp = br * 0.10
+
+        for oi in range(num_o):
+            # Evenly spread around center bottom
+            angle = (oi / num_o) * 2.0 * math.pi
+            spread = br * 0.12
+            anchor_x = cx + spread * math.cos(angle)
+            anchor_y = bell_cy + br * 0.35  # just below dome center
+
+            freq = self._oral_freq[oi]
+            wave_speed = self._oral_wave_speed[oi]
+
+            pts = self._tentacle_points(
+                anchor_x, anchor_y, oi,
+                self._ORAL_SEGMENTS, oral_seg_spacing,
+                oral_base_amp, freq, wave_speed, bell_pulse_factor
+            )
+
+            for seg in range(len(pts) - 1):
+                frac = seg / max(self._ORAL_SEGMENTS - 1, 1)
+                hue = (0.50 + frac * 0.10 + self.hue_offset) % 1.0
+                sat = 0.65
+                val = 0.95 - frac * 0.45
+                val = max(0.10, val)
+                color = hsv_to_hex(hue, sat, val)
+                lw = 2.5 - frac * 1.0
+                lw = max(1.5, lw)
+
+                x1, y1 = pts[seg]
+                x2, y2 = pts[seg + 1]
+                edges.append((x1, y1, x2, y2, color, lw))
+
+        return edges
+
+
 # =============================================================================
 # SCREENSAVER (MAIN)
 # =============================================================================
@@ -3540,6 +3761,7 @@ class Screensaver:
         HilbertCurve, CreaturesViz,
         DNAHelix, LorenzAttractor, PendulumWave, AuroraBorealis,
         WireframeTerrain, Lissajous3D, MagneticField, FractalTree,
+        MathJellyfish,
     ]
 
     def __init__(self):
