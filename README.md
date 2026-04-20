@@ -1,5 +1,10 @@
 # 🚀 Adaptive Brightness & Volume Controller
 
+## Technical deep-dives
+
+- **Medium:** [The $0.30 Chip That Desktops Forgot](https://medium.com/@r.manov/the-0-30-chip-that-desktops-forgot-085ed4a4a144)
+- **Dev.to:** [I Turned a Webcam Into an Ambient Light Sensor](https://dev.to/ruslan_manov/i-turned-a-webcam-into-an-ambient-light-sensor-265l)
+
 ## High-Performance Display and Audio Management System
 
 An innovative cross-platform system that revolutionizes device display and audio management through intelligent environmental sensing, real-time adjustments, and **blazing-fast performance**.
