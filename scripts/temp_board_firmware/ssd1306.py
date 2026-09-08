@@ -1,3 +1,7 @@
+# Derived from the MicroPython SSD1306 driver lineage.
+# Current official reference: https://github.com/micropython/micropython-lib/blob/a08087249fda8a7994f7c54ccaad29fb9fcc448a/micropython/drivers/display/ssd1306/ssd1306.py
+# SPDX-License-Identifier: MIT
+# See THIRD_PARTY_NOTICES.md for upstream copyright and license notices.
 # MicroPython SSD1306 OLED driver, trimmed for a 128x64 I2C display.
 from micropython import const
 import framebuf
