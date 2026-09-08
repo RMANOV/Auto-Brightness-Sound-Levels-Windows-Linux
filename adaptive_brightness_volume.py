@@ -10,34 +10,37 @@ Changes from original (rust-rewrite branch):
   - New: _detect_brightness_method_windows, Windows get/set brightness/volume
 """
 
-import cv2
-import numpy as np
-import os
-import time
-import platform
-import sys
-import signal
-import gc
 import atexit
-import subprocess
-from threading import Thread, Event, Lock
-from queue import Queue, Empty
-from typing import Optional, Tuple, cast
+import functools
+import gc
+import os
+import platform
 import re
 import shutil
-import functools
+import signal
+import subprocess
+import sys
+import time
 from collections import defaultdict
+from queue import Empty, Queue
+from threading import Event, Lock, Thread
+from typing import cast
+
+import cv2
+import numpy as np
 
 # Precompiled regex patterns for volume parsing
-_RE_AMIXER_VOL = re.compile(r'\[([0-9]+)%\]')
-_RE_PACTL_VOL = re.compile(r'(\d+)%')
-_RE_WPCTL_VOL = re.compile(r'Volume: ([0-9.]+)')
+_RE_AMIXER_VOL = re.compile(r"\[([0-9]+)%\]")
+_RE_PACTL_VOL = re.compile(r"(\d+)%")
+_RE_WPCTL_VOL = re.compile(r"Volume: ([0-9.]+)")
 
 # Performance monitoring
 perf_timers = defaultdict(list)
 
+
 def timeit(func_name):
     """Decorator to time function execution for performance monitoring"""
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -49,16 +52,21 @@ def timeit(func_name):
             if len(perf_timers[func_name]) > 100:
                 perf_timers[func_name] = perf_timers[func_name][-100:]
             return result
+
         return wrapper
+
     return decorator
+
 
 # Global cleanup registry for tracking resources
 _cleanup_registry = []
 _controller_instance = None
 
+
 def register_cleanup(cleanup_func):
     """Register a cleanup function to be called on exit"""
     _cleanup_registry.append(cleanup_func)
+
 
 def comprehensive_cleanup():
     """Comprehensive resource cleanup function"""
@@ -68,7 +76,7 @@ def comprehensive_cleanup():
     if _controller_instance:
         try:
             _controller_instance.stop_event.set()
-            if hasattr(_controller_instance, 'process_thread') and _controller_instance.process_thread:
+            if hasattr(_controller_instance, "process_thread") and _controller_instance.process_thread:
                 if _controller_instance.process_thread.is_alive():
                     _controller_instance.process_thread.join(timeout=2.0)
         except Exception as e:
@@ -81,12 +89,13 @@ def comprehensive_cleanup():
 
     try:
         import numba
-        if hasattr(numba, 'cuda'):
+
+        if hasattr(numba, "cuda"):
             try:
                 numba.cuda.close()
             except Exception:
                 pass
-        if hasattr(numba, 'typed'):
+        if hasattr(numba, "typed"):
             numba.typed.List.empty_list.cache_clear()
     except ImportError:
         pass
@@ -109,11 +118,13 @@ def comprehensive_cleanup():
 
     print(f"Cleanup completed - collected {gc.collect()} objects")
 
+
 def signal_handler(signum, frame):
     """Signal handler for graceful shutdown"""
     print(f"\nReceived signal {signum}, initiating cleanup...")
     comprehensive_cleanup()
     sys.exit(0)
+
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
@@ -123,6 +134,7 @@ atexit.register(comprehensive_cleanup)
 USE_RUST = False
 try:
     import adaptive_rust
+
     USE_RUST = True
     print(f"Using Rust backend v{adaptive_rust.version()} (2-4x faster than Numba)")
 except ImportError:
@@ -133,8 +145,10 @@ try:
 except ImportError:
     if not USE_RUST:
         print("Warning: numba not found. Using fallback implementation.")
+
     def njit(func):
         return func
+
 
 # Audio detection
 AUDIO_AVAILABLE = False
@@ -142,6 +156,7 @@ AUDIO_METHOD = ""
 
 try:
     import sounddevice as sd  # type: ignore
+
     AUDIO_AVAILABLE = True
     AUDIO_METHOD = "sounddevice"
 except (ImportError, OSError) as e:
@@ -169,9 +184,10 @@ SCREEN_CAPTURE_AVAILABLE = False
 
 try:
     from PIL import ImageGrab  # type: ignore
+
     try:
         test_grab = ImageGrab.grab(bbox=(0, 0, 10, 10))
-        test_grab.size
+        _ = test_grab.size
         SCREEN_CAPTURE_METHOD = "pillow"
         SCREEN_CAPTURE_AVAILABLE = True
         print("Found PIL.ImageGrab for screen content analysis")
@@ -183,6 +199,7 @@ except ImportError:
 if not SCREEN_CAPTURE_AVAILABLE:
     try:
         import mss  # type: ignore
+
         SCREEN_CAPTURE_METHOD = "mss"
         SCREEN_CAPTURE_AVAILABLE = True
         print("Found MSS for screen content analysis")
@@ -202,12 +219,14 @@ if not SCREEN_CAPTURE_AVAILABLE and platform.system().lower() == "linux":
 if not SCREEN_CAPTURE_AVAILABLE and platform.system().lower() == "linux":
     try:
         import gi  # type: ignore
-        gi.require_version('Gdk', '3.0')
+
+        gi.require_version("Gdk", "3.0")
         from gi.repository import Gdk  # type: ignore
+
         SCREEN_CAPTURE_METHOD = "gtk"
         SCREEN_CAPTURE_AVAILABLE = True
         print("Found GTK for screen content analysis")
-    except (ImportError, ValueError):
+    except ImportError, ValueError:
         print("Warning: GTK screenshot method not available.")
 
 if not SCREEN_CAPTURE_AVAILABLE:
@@ -221,11 +240,15 @@ class AdaptiveBrightnessVolumeController:
     Supports Linux and Windows. Uses camera-based ambient light detection
     with exposure lock for reliable measurements.
     """
-    def __init__(self, camera_index: int = 0,
-                 lock_exposure: bool = True,
-                 brightness_range: Tuple[int, int] = (5, 45),
-                 volume_range: Tuple[int, int] = (3, 35),
-                 auto_exit: bool = True):
+
+    def __init__(
+        self,
+        camera_index: int = 0,
+        lock_exposure: bool = True,
+        brightness_range: tuple[int, int] = (5, 45),
+        volume_range: tuple[int, int] = (3, 35),
+        auto_exit: bool = True,
+    ):
         self.system = platform.system().lower()
         if self.system not in ["linux", "windows"]:
             print(f"Currently only Linux and Windows are supported. Detected: {self.system}")
@@ -250,7 +273,7 @@ class AdaptiveBrightnessVolumeController:
             sys.exit(1)
 
         # Cache volume control tool (detect once, not every call)
-        self.volume_tool: Optional[str] = None
+        self.volume_tool: str | None = None
         if self.system == "linux":
             for tool in ("amixer", "pactl", "wpctl"):
                 if shutil.which(tool):
@@ -269,16 +292,16 @@ class AdaptiveBrightnessVolumeController:
         self.max_volume: int = volume_range[1]
 
         # Initialize state
-        self.cap: Optional[cv2.VideoCapture] = None
+        self.cap: cv2.VideoCapture | None = None
         self.setup_camera()
         self.setup_state()
 
         # Threading and synchronization
         self.stop_event: Event = Event()
         self.lock: Lock = Lock()
-        self.process_thread: Optional[Thread] = None
-        self.frame_queue: Optional[Queue] = None
-        self.brightness_queue: Optional[Queue] = None
+        self.process_thread: Thread | None = None
+        self.frame_queue: Queue | None = None
+        self.brightness_queue: Queue | None = None
 
         # Activity tracking
         self.last_activity_time: float = time.time()
@@ -294,13 +317,15 @@ class AdaptiveBrightnessVolumeController:
         self.sun_window = None
         try:
             from sunrise_sunset_calculator import SunCalculator
+
             calc = SunCalculator()
             active, window = calc.is_in_active_window()
             self.sun_window = window if active else None
             if self.sun_window:
                 times = calc.calculate_sun_times()
-                print(f"Sun-aware mode: {self.sun_window} window "
-                      f"(sunrise={times['sunrise']}, sunset={times['sunset']})")
+                print(
+                    f"Sun-aware mode: {self.sun_window} window (sunrise={times['sunrise']}, sunset={times['sunset']})"
+                )
         except Exception:
             pass
 
@@ -353,17 +378,16 @@ class AdaptiveBrightnessVolumeController:
         if self.cap is not None and self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-            print(f"Camera initialized at index {self.camera_index} "
-                  f"(backend: {self.cap.getBackendName()})")
+            print(f"Camera initialized at index {self.camera_index} (backend: {self.cap.getBackendName()})")
 
             if self.lock_exposure:
                 self._apply_exposure_lock()
         else:
             print("No working camera found")
             print("Using fallback brightness control without ambient sensing")
-            self.cap = cast(Optional[cv2.VideoCapture], None)
+            self.cap = cast(cv2.VideoCapture | None, None)
 
-    def _setup_camera_windows(self) -> Optional[cv2.VideoCapture]:
+    def _setup_camera_windows(self) -> cv2.VideoCapture | None:
         """Windows-specific camera setup using DSHOW backend.
 
         NVIDIA Broadcast installs a virtual camera (VCAMDS) that occupies
@@ -387,8 +411,7 @@ class AdaptiveBrightnessVolumeController:
                         # Real camera: exposure is readable/settable
                         self.camera_index = idx
                         self._camera_backend = cv2.CAP_DSHOW
-                        print(f"Found real camera at DSHOW index {idx} "
-                              f"(exposure={exposure}, readback={readback})")
+                        print(f"Found real camera at DSHOW index {idx} (exposure={exposure}, readback={readback})")
                         return cap
                     else:
                         print(f"Skipping virtual camera at DSHOW index {idx}")
@@ -410,8 +433,7 @@ class AdaptiveBrightnessVolumeController:
                         self.camera_index = idx
                         self._camera_backend = cv2.CAP_MSMF
                         self.lock_exposure = False
-                        print(f"Using MSMF fallback at index {idx} "
-                              f"(exposure lock not available)")
+                        print(f"Using MSMF fallback at index {idx} (exposure lock not available)")
                         return cap
                 cap.release()
             except Exception:
@@ -419,13 +441,12 @@ class AdaptiveBrightnessVolumeController:
 
         return None
 
-    def _setup_camera_linux(self) -> Optional[cv2.VideoCapture]:
+    def _setup_camera_linux(self) -> cv2.VideoCapture | None:
         """Linux camera setup (original behavior preserved)."""
         cap = cv2.VideoCapture(self.camera_index)
 
         if not cap.isOpened():
-            print(f"Warning: Could not open camera {self.camera_index}, "
-                  f"trying alternatives...")
+            print(f"Warning: Could not open camera {self.camera_index}, trying alternatives...")
             for idx in range(10):
                 if idx == self.camera_index:
                     continue
@@ -463,8 +484,7 @@ class AdaptiveBrightnessVolumeController:
 
         if ok_ae or ok_ex:
             readback = self.cap.get(cv2.CAP_PROP_EXPOSURE)
-            print(f"Exposure locked at {readback:.0f} "
-                  f"(set_auto_exp={ok_ae}, set_exp={ok_ex})")
+            print(f"Exposure locked at {readback:.0f} (set_auto_exp={ok_ae}, set_exp={ok_ex})")
             # Flush frames to let new exposure settle
             for _ in range(10):
                 self.cap.read()
@@ -487,12 +507,12 @@ class AdaptiveBrightnessVolumeController:
         if backlight_dirs:
             self.backlight_dir = f"/sys/class/backlight/{backlight_dirs[0]}"
             try:
-                with open(f"{self.backlight_dir}/brightness", "r") as f:
+                with open(f"{self.backlight_dir}/brightness") as f:
                     f.read()
-                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                with open(f"{self.backlight_dir}/max_brightness") as f:
                     f.read()
                 return "sysfs"
-            except (IOError, PermissionError):
+            except OSError, PermissionError:
                 pass
         return ""
 
@@ -500,11 +520,16 @@ class AdaptiveBrightnessVolumeController:
         """Detect brightness control method on Windows via WMI."""
         try:
             result = subprocess.run(
-                ['powershell.exe', '-Command',
-                 'Get-CimInstance -Namespace root/WMI '
-                 '-ClassName WmiMonitorBrightness '
-                 '| Select-Object -ExpandProperty CurrentBrightness'],
-                capture_output=True, text=True, timeout=5
+                [
+                    "powershell.exe",
+                    "-Command",
+                    "Get-CimInstance -Namespace root/WMI "
+                    "-ClassName WmiMonitorBrightness "
+                    "| Select-Object -ExpandProperty CurrentBrightness",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip().isdigit():
                 return "wmi"
@@ -517,10 +542,14 @@ class AdaptiveBrightnessVolumeController:
         if self.system == "windows" and self.brightness_method == "wmi":
             try:
                 result = subprocess.run(
-                    ['powershell.exe', '-Command',
-                     '(Get-CimInstance -Namespace root/WMI '
-                     '-ClassName WmiMonitorBrightness).CurrentBrightness'],
-                    capture_output=True, text=True, timeout=5
+                    [
+                        "powershell.exe",
+                        "-Command",
+                        "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0:
                     return float(result.stdout.strip())
@@ -545,12 +574,12 @@ class AdaptiveBrightnessVolumeController:
                 return 50.0
         elif self.brightness_method == "sysfs":
             try:
-                with open(f"{self.backlight_dir}/brightness", "r") as f:
+                with open(f"{self.backlight_dir}/brightness") as f:
                     brightness = int(f.read().strip())
-                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                with open(f"{self.backlight_dir}/max_brightness") as f:
                     max_brightness = int(f.read().strip())
                 return brightness / max_brightness * 100
-            except (IOError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 print(f"Error reading brightness: {e}")
                 return 50.0
         return 50.0
@@ -559,18 +588,21 @@ class AdaptiveBrightnessVolumeController:
         """Set screen brightness as percentage"""
         brightness = max(self.min_brightness, min(self.max_brightness, brightness))
         calibrated_brightness = round(brightness)
-        calibrated_brightness = max(self.min_brightness,
-                                    min(self.max_brightness, calibrated_brightness))
+        calibrated_brightness = max(self.min_brightness, min(self.max_brightness, calibrated_brightness))
         print(f"Brightness: Target: {brightness:.1f}% -> Setting: {calibrated_brightness}%")
 
         if self.system == "windows" and self.brightness_method == "wmi":
             try:
                 subprocess.run(
-                    ['powershell.exe', '-Command',
-                     f'(Get-WmiObject -Namespace root/WMI '
-                     f'-Class WmiMonitorBrightnessMethods)'
-                     f'.WmiSetBrightness(1,{calibrated_brightness})'],
-                    capture_output=True, timeout=5
+                    [
+                        "powershell.exe",
+                        "-Command",
+                        f"(Get-WmiObject -Namespace root/WMI "
+                        f"-Class WmiMonitorBrightnessMethods)"
+                        f".WmiSetBrightness(1,{calibrated_brightness})",
+                    ],
+                    capture_output=True,
+                    timeout=5,
                 )
             except Exception as e:
                 print(f"Error setting Windows brightness: {e}")
@@ -593,7 +625,7 @@ class AdaptiveBrightnessVolumeController:
                 try:
                     backlight_dir = "/sys/class/backlight/intel_backlight"
                     if os.path.exists(backlight_dir):
-                        with open(f"{backlight_dir}/max_brightness", "r") as f:
+                        with open(f"{backlight_dir}/max_brightness") as f:
                             max_brightness = int(f.read().strip())
                         value = int((calibrated_brightness / 100) * max_brightness)
                         try:
@@ -601,18 +633,20 @@ class AdaptiveBrightnessVolumeController:
                                 f.write(str(value))
                             success = True
                         except PermissionError:
-                            result4 = os.system(f"echo {value} | sudo -n tee {backlight_dir}/brightness >/dev/null 2>&1")
+                            result4 = os.system(
+                                f"echo {value} | sudo -n tee {backlight_dir}/brightness >/dev/null 2>&1"
+                            )
                             if result4 == 0:
                                 success = True
                 except Exception as e:
                     print(f"DEBUG: Sysfs fallback failed: {e}")
             if not success:
-                print(f"Warning: Failed to set brightness - all methods failed")
+                print("Warning: Failed to set brightness - all methods failed")
         elif self.brightness_method == "xbacklight":
             os.system(f"xbacklight -set {calibrated_brightness}")
         elif self.brightness_method == "sysfs":
             try:
-                with open(f"{self.backlight_dir}/max_brightness", "r") as f:
+                with open(f"{self.backlight_dir}/max_brightness") as f:
                     max_brightness = int(f.read().strip())
                 value = int((calibrated_brightness / 100) * max_brightness)
                 try:
@@ -633,12 +667,17 @@ class AdaptiveBrightnessVolumeController:
             try:
                 # Use PowerShell with Windows Audio Session API
                 result = subprocess.run(
-                    ['powershell.exe', '-Command',
-                     '[Math]::Round('
-                     '(New-Object -ComObject WScript.Shell)'
-                     '.RegRead("HKCU\\SOFTWARE\\Microsoft\\Multimedia'
-                     '\\Audio\\Volume") / 65535 * 100)'],
-                    capture_output=True, text=True, timeout=5
+                    [
+                        "powershell.exe",
+                        "-Command",
+                        "[Math]::Round("
+                        "(New-Object -ComObject WScript.Shell)"
+                        '.RegRead("HKCU\\SOFTWARE\\Microsoft\\Multimedia'
+                        '\\Audio\\Volume") / 65535 * 100)',
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0 and result.stdout.strip().isdigit():
                     return int(result.stdout.strip())
@@ -654,13 +693,17 @@ class AdaptiveBrightnessVolumeController:
                     if m:
                         return int(m.group(1))
             elif self.volume_tool == "pactl":
-                result = subprocess.run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"], capture_output=True, text=True, timeout=3)
+                result = subprocess.run(
+                    ["pactl", "get-sink-volume", "@DEFAULT_SINK@"], capture_output=True, text=True, timeout=3
+                )
                 if result.returncode == 0:
                     m = _RE_PACTL_VOL.search(result.stdout)
                     if m:
                         return int(m.group(1))
             elif self.volume_tool == "wpctl":
-                result = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], capture_output=True, text=True, timeout=3)
+                result = subprocess.run(
+                    ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], capture_output=True, text=True, timeout=3
+                )
                 if result.returncode == 0:
                     m = _RE_WPCTL_VOL.search(result.stdout)
                     if m:
@@ -681,18 +724,19 @@ class AdaptiveBrightnessVolumeController:
                 nircmd_path = os.path.expanduser("~/.local/bin/nircmd.exe")
                 if os.path.exists(nircmd_path):
                     vol_value = int(volume / 100 * 65535)
-                    subprocess.run(
-                        [nircmd_path, 'setsysvolume', str(vol_value)],
-                        capture_output=True, timeout=5
-                    )
+                    subprocess.run([nircmd_path, "setsysvolume", str(vol_value)], capture_output=True, timeout=5)
                 else:
                     # PowerShell fallback using AudioDeviceCmdlets or WScript
                     subprocess.run(
-                        ['powershell.exe', '-Command',
-                         f'$obj = New-Object -ComObject WScript.Shell; '
-                         f'1..50 | ForEach-Object {{ $obj.SendKeys([char]174) }}; '
-                         f'1..{max(1, volume // 2)} | ForEach-Object {{ $obj.SendKeys([char]175) }}'],
-                        capture_output=True, timeout=10
+                        [
+                            "powershell.exe",
+                            "-Command",
+                            f"$obj = New-Object -ComObject WScript.Shell; "
+                            f"1..50 | ForEach-Object {{ $obj.SendKeys([char]174) }}; "
+                            f"1..{max(1, volume // 2)} | ForEach-Object {{ $obj.SendKeys([char]175) }}",
+                        ],
+                        capture_output=True,
+                        timeout=10,
                     )
             except Exception as e:
                 print(f"Warning: Failed to set volume on Windows: {e}")
@@ -703,13 +747,19 @@ class AdaptiveBrightnessVolumeController:
         try:
             if self.volume_tool == "amixer":
                 r = subprocess.run(["amixer", "set", "Master", f"{vol}%"], capture_output=True, timeout=3)
-                success = (r.returncode == 0)
+                success = r.returncode == 0
             elif self.volume_tool == "pactl":
-                r = subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], capture_output=True, timeout=3)
-                success = (r.returncode == 0)
+                r = subprocess.run(
+                    ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"], capture_output=True, timeout=3
+                )
+                success = r.returncode == 0
             elif self.volume_tool == "wpctl":
-                r = subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{vol / 100.0:.2f}"], capture_output=True, timeout=3)
-                success = (r.returncode == 0)
+                r = subprocess.run(
+                    ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{vol / 100.0:.2f}"],
+                    capture_output=True,
+                    timeout=3,
+                )
+                success = r.returncode == 0
         except Exception as e:
             print(f"Warning: Volume set error: {e}")
         if not success:
@@ -719,7 +769,7 @@ class AdaptiveBrightnessVolumeController:
     # STATE & SMOOTHING
     # ========================================================================
 
-    def load_saved_state(self) -> Tuple[Optional[float], Optional[float]]:
+    def load_saved_state(self) -> tuple[float | None, float | None]:
         """Load previously saved brightness and volume settings"""
         try:
             config_file = os.path.expanduser("~/.config/adaptive-controller/last_state.txt")
@@ -727,7 +777,7 @@ class AdaptiveBrightnessVolumeController:
                 brightness = None
                 volume = None
                 timestamp = None
-                with open(config_file, "r") as f:
+                with open(config_file) as f:
                     for line in f:
                         if line.startswith("brightness="):
                             brightness = float(line.strip().split("=")[1])
@@ -775,8 +825,8 @@ class AdaptiveBrightnessVolumeController:
         self.current_warmup_frame: int = 0
         self.warmup_cooldown: float = 0.05
         self.is_in_warmup: bool = True
-        self.initial_brightness: Optional[float] = None
-        self.initial_volume: Optional[float] = None
+        self.initial_brightness: float | None = None
+        self.initial_volume: float | None = None
 
         self.audio_warmup_frames: int = 40
         self.audio_warmup_cooldown: float = 0.005
@@ -823,7 +873,7 @@ class AdaptiveBrightnessVolumeController:
         self.is_active = False
         if self.cap:
             self.cap.release()
-            self.cap = cast(Optional[cv2.VideoCapture], None)
+            self.cap = cast(cv2.VideoCapture | None, None)
         cv2.destroyAllWindows()
 
     # ========================================================================
@@ -837,12 +887,11 @@ class AdaptiveBrightnessVolumeController:
         return np.mean(frame) / 255.0 * 100.0
 
     @staticmethod
-    def _calculate_brightness_mapping_jit(camera_brightness: float,
-                                          min_brightness: float,
-                                          max_brightness: float) -> float:
+    def _calculate_brightness_mapping_jit(
+        camera_brightness: float, min_brightness: float, max_brightness: float
+    ) -> float:
         if USE_RUST:
-            return adaptive_rust.calculate_brightness_mapping(
-                camera_brightness, min_brightness, max_brightness)
+            return adaptive_rust.calculate_brightness_mapping(camera_brightness, min_brightness, max_brightness)
         base_linear = min_brightness + (camera_brightness * 0.35)
         boost_factor = 1.0
         if 35.0 <= camera_brightness <= 55.0:
@@ -853,12 +902,9 @@ class AdaptiveBrightnessVolumeController:
         return max(min_brightness, min(max_brightness, target_brightness))
 
     @staticmethod
-    def _calculate_volume_mapping_jit(normalized_noise: float,
-                                      min_volume: float,
-                                      max_volume: float) -> float:
+    def _calculate_volume_mapping_jit(normalized_noise: float, min_volume: float, max_volume: float) -> float:
         if USE_RUST:
-            return adaptive_rust.calculate_volume_mapping(
-                normalized_noise, min_volume, max_volume)
+            return adaptive_rust.calculate_volume_mapping(normalized_noise, min_volume, max_volume)
         if normalized_noise > 0.0:
             curve_factor = 0.55
             multiplier = 12.0
@@ -872,12 +918,9 @@ class AdaptiveBrightnessVolumeController:
         return adjusted_noise * volume_range + min_volume
 
     @staticmethod
-    def _smooth_transition_jit(current_value: float,
-                               target_value: float,
-                               smoothing_factor: float) -> float:
+    def _smooth_transition_jit(current_value: float, target_value: float, smoothing_factor: float) -> float:
         if USE_RUST:
-            return adaptive_rust.smooth_transition(
-                current_value, target_value, smoothing_factor)
+            return adaptive_rust.smooth_transition(current_value, target_value, smoothing_factor)
         error = target_value - current_value
         return current_value + error * smoothing_factor
 
@@ -894,12 +937,9 @@ class AdaptiveBrightnessVolumeController:
             return 1.0
 
     @staticmethod
-    def _check_significant_change_jit(current_brightness: float,
-                                      last_brightness: float,
-                                      is_dimming: bool) -> bool:
+    def _check_significant_change_jit(current_brightness: float, last_brightness: float, is_dimming: bool) -> bool:
         if USE_RUST:
-            return adaptive_rust.check_significant_change(
-                current_brightness, last_brightness, is_dimming)
+            return adaptive_rust.check_significant_change(current_brightness, last_brightness, is_dimming)
         brightness_change = current_brightness - last_brightness
         abs_change = abs(brightness_change)
         dimming_threshold = 8.0
@@ -929,7 +969,7 @@ class AdaptiveBrightnessVolumeController:
                 print(f"{func_name:20s}: {avg_time:6.2f}ms avg ({min_time:5.2f}-{max_time:5.2f}ms) [{calls:3d} calls]")
         if total_calls > 0:
             print(f"{'TOTAL':20s}: {total_time:6.1f}ms total, {total_calls:3d} calls")
-            print(f"{'EFFICIENCY':20s}: {total_time/total_calls:6.2f}ms per operation")
+            print(f"{'EFFICIENCY':20s}: {total_time / total_calls:6.2f}ms per operation")
         print("=" * 60)
 
     # ========================================================================
@@ -937,7 +977,7 @@ class AdaptiveBrightnessVolumeController:
     # ========================================================================
 
     @timeit("analyze_image")
-    def analyze_image(self, frame: Optional[np.ndarray]) -> float:
+    def analyze_image(self, frame: np.ndarray | None) -> float:
         if frame is None:
             return 50.0
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -953,15 +993,12 @@ class AdaptiveBrightnessVolumeController:
                     screenshot = ImageGrab.grab()
                     img = np.array(screenshot)
                 except Exception as e:
-                    raise Exception(f"PIL capture failed: {e}")
+                    raise Exception(f"PIL capture failed: {e}") from e
             elif self.xrandr_available:
                 try:
-                    process = subprocess.run(
-                        ["xrandr", "--current"],
-                        capture_output=True, text=True, check=True
-                    )
+                    process = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, check=True)
                     output = process.stdout
-                    lines = output.strip().split('\n')
+                    lines = output.strip().split("\n")
                     resolution = None
                     for line in lines:
                         if "*" in line and "+" in line:
@@ -979,7 +1016,8 @@ class AdaptiveBrightnessVolumeController:
                     center_y = height // 4
                     center_width = width // 2
                     center_height = height // 2
-                    cmd = f"import -window root -crop {center_width}x{center_height}+{center_x}+{center_y} {self.screenshot_path}"
+                    crop_arg = f"{center_width}x{center_height}+{center_x}+{center_y}"
+                    cmd = f"import -window root -crop {crop_arg} {self.screenshot_path}"
                     result = os.system(cmd)
                     if result != 0:
                         raise Exception("Failed to capture screenshot with import")
@@ -987,7 +1025,7 @@ class AdaptiveBrightnessVolumeController:
                     if img is None:
                         raise Exception("Failed to read captured screenshot")
                 except Exception as e:
-                    raise Exception(f"xrandr-import capture failed: {e}")
+                    raise Exception(f"xrandr-import capture failed: {e}") from e
             elif self.gtk_available:
                 try:
                     window = Gdk.get_default_root_window()
@@ -995,14 +1033,14 @@ class AdaptiveBrightnessVolumeController:
                     pb = Gdk.pixbuf_get_from_window(window, x, y, width, height)
                     img = np.array(pb.get_pixels_array())
                 except Exception as e:
-                    raise Exception(f"GTK capture failed: {e}")
+                    raise Exception(f"GTK capture failed: {e}") from e
             elif SCREEN_CAPTURE_METHOD == "mss" and self.sct is not None:
                 try:
                     monitor = self.sct.monitors[1]
                     screenshot = self.sct.grab(monitor)
                     img = np.array(screenshot)
                 except Exception as e:
-                    raise Exception(f"MSS capture failed: {e}")
+                    raise Exception(f"MSS capture failed: {e}") from e
             else:
                 return 1.0
 
@@ -1028,10 +1066,7 @@ class AdaptiveBrightnessVolumeController:
         try:
             sample_count = int(self.audio_duration * self.audio_samplerate)
             if AUDIO_METHOD == "sounddevice":
-                audio = sd.rec(sample_count,
-                               samplerate=self.audio_samplerate,
-                               channels=1,
-                               blocking=True)
+                audio = sd.rec(sample_count, samplerate=self.audio_samplerate, channels=1, blocking=True)
                 return audio.flatten()
             elif AUDIO_METHOD == "arecord":
                 audio_file = os.path.expanduser("~/.cache/adaptive-controller/audio.wav")
@@ -1041,7 +1076,8 @@ class AdaptiveBrightnessVolumeController:
                 if result != 0:
                     raise Exception("Failed to record audio with arecord")
                 import wave
-                with wave.open(audio_file, 'rb') as wf:
+
+                with wave.open(audio_file, "rb") as wf:
                     n_frames = wf.getnframes()
                     audio_bytes = wf.readframes(n_frames)
                     audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -1053,7 +1089,8 @@ class AdaptiveBrightnessVolumeController:
                 if result != 0:
                     raise Exception("Failed to record audio with sox")
                 import wave
-                with wave.open(audio_file, 'rb') as wf:
+
+                with wave.open(audio_file, "rb") as wf:
                     n_frames = wf.getnframes()
                     audio_bytes = wf.readframes(n_frames)
                     audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -1107,7 +1144,7 @@ class AdaptiveBrightnessVolumeController:
         # Auto-exit convergence tracking
         _converge_count = 0
         _converge_threshold = 1.0  # % delta to consider "stable"
-        _converge_required = 3     # consecutive stable frames to confirm
+        _converge_required = 3  # consecutive stable frames to confirm
         _last_target_brightness = None
         _last_target_volume = None
 
@@ -1123,7 +1160,10 @@ class AdaptiveBrightnessVolumeController:
                     last_perf_report_time = current_time
 
                 if self.is_active:
-                    if SCREEN_CAPTURE_AVAILABLE and current_time - self.last_screen_check_time > self.screen_check_interval:
+                    if (
+                        SCREEN_CAPTURE_AVAILABLE
+                        and current_time - self.last_screen_check_time > self.screen_check_interval
+                    ):
                         self.screen_brightness_factor = self.analyze_screen_content()
                         self.last_screen_check_time = current_time
 
@@ -1145,12 +1185,16 @@ class AdaptiveBrightnessVolumeController:
                         if last_camera_brightness is not None:
                             brightness_change = camera_brightness - last_camera_brightness
                             is_dimming = brightness_change < 0
-                            if self._check_significant_change_jit(camera_brightness, last_camera_brightness, is_dimming):
+                            if self._check_significant_change_jit(
+                                camera_brightness, last_camera_brightness, is_dimming
+                            ):
                                 self.last_significant_change_time = current_time
                                 direction = "DIMMING" if is_dimming else "BRIGHTENING"
-                                print(f"Light change detected - {direction}: "
-                                      f"{last_camera_brightness:.1f} -> {camera_brightness:.1f} "
-                                      f"(delta {brightness_change:.1f})")
+                                print(
+                                    f"Light change detected - {direction}: "
+                                    f"{last_camera_brightness:.1f} -> {camera_brightness:.1f} "
+                                    f"(delta {brightness_change:.1f})"
+                                )
                                 if is_dimming:
                                     self.sensitivity_to_changes = 2.5
                                 else:
@@ -1167,9 +1211,7 @@ class AdaptiveBrightnessVolumeController:
                             adjustment_boost = base_adjustment_speed
 
                         target_brightness = self._calculate_brightness_mapping_jit(
-                            camera_brightness,
-                            float(self.min_brightness),
-                            float(self.max_brightness)
+                            camera_brightness, float(self.min_brightness), float(self.max_brightness)
                         )
 
                         if SCREEN_CAPTURE_AVAILABLE:
@@ -1191,7 +1233,7 @@ class AdaptiveBrightnessVolumeController:
                                 self.smoothed_brightness = self._smooth_transition_jit(
                                     self.smoothed_brightness,
                                     target_brightness,
-                                    self.brightness_smoothing_factor * self.warmup_cooldown
+                                    self.brightness_smoothing_factor * self.warmup_cooldown,
                                 )
                             else:
                                 self.is_in_warmup = False
@@ -1202,20 +1244,19 @@ class AdaptiveBrightnessVolumeController:
                             smooth_factor = self.brightness_smoothing_factor * adjustment_boost * sun_boost
                             old_brightness = self.smoothed_brightness
                             self.smoothed_brightness = self._smooth_transition_jit(
-                                self.smoothed_brightness,
-                                target_brightness,
-                                smooth_factor
+                                self.smoothed_brightness, target_brightness, smooth_factor
                             )
                             error = target_brightness - old_brightness
                             if abs(error) > 2.0:
-                                print(f"Adjusting brightness: {old_brightness:.1f}% -> "
-                                      f"{target_brightness:.1f}% "
-                                      f"(rate: {smooth_factor:.2f}, step: {error * smooth_factor:.2f})")
+                                print(
+                                    f"Adjusting brightness: {old_brightness:.1f}% -> "
+                                    f"{target_brightness:.1f}% "
+                                    f"(rate: {smooth_factor:.2f}, step: {error * smooth_factor:.2f})"
+                                )
 
                         self.smoothed_brightness = max(
-                            float(self.min_brightness),
-                            min(float(self.max_brightness),
-                                self.smoothed_brightness))
+                            float(self.min_brightness), min(float(self.max_brightness), self.smoothed_brightness)
+                        )
 
                         try:
                             self.set_brightness(round(self.smoothed_brightness))
@@ -1231,9 +1272,7 @@ class AdaptiveBrightnessVolumeController:
                         normalized_noise = (noise_level - self.min_noise_level) / noise_range
                         normalized_noise = max(0.0, min(1.0, normalized_noise))
                         target_volume = self._calculate_volume_mapping_jit(
-                            normalized_noise,
-                            float(self.min_volume),
-                            float(self.max_volume)
+                            normalized_noise, float(self.min_volume), float(self.max_volume)
                         )
 
                         if self.is_audio_in_warmup:
@@ -1250,12 +1289,14 @@ class AdaptiveBrightnessVolumeController:
                                 volume_change = 0
                             elif self.current_warmup_frame <= self.audio_warmup_frames:
                                 if self.current_warmup_frame % 8 == 0:
-                                    audio_progress = ((self.current_warmup_frame - self.audio_warmup_threshold) * 100) // (self.audio_warmup_frames - self.audio_warmup_threshold)
+                                    audio_progress = (
+                                        (self.current_warmup_frame - self.audio_warmup_threshold) * 100
+                                    ) // (self.audio_warmup_frames - self.audio_warmup_threshold)
                                     print(f"Audio calibrating... {audio_progress}%")
                                 self.smoothed_volume = self._smooth_transition_jit(
                                     self.smoothed_volume,
                                     target_volume,
-                                    self.volume_smoothing_factor * self.audio_warmup_cooldown
+                                    self.volume_smoothing_factor * self.audio_warmup_cooldown,
                                 )
                                 volume_change = self.smoothed_volume - target_volume
                             else:
@@ -1263,18 +1304,14 @@ class AdaptiveBrightnessVolumeController:
                                 print("Audio calibration complete")
                                 old_volume = self.smoothed_volume
                                 self.smoothed_volume = self._smooth_transition_jit(
-                                    self.smoothed_volume,
-                                    target_volume,
-                                    self.volume_smoothing_factor * 0.5
+                                    self.smoothed_volume, target_volume, self.volume_smoothing_factor * 0.5
                                 )
                                 volume_change = self.smoothed_volume - old_volume
                         else:
                             old_volume = self.smoothed_volume
                             vol_sun_boost = 1.5 if self.sun_window else 1.0
                             self.smoothed_volume = self._smooth_transition_jit(
-                                self.smoothed_volume,
-                                target_volume,
-                                self.volume_smoothing_factor * vol_sun_boost
+                                self.smoothed_volume, target_volume, self.volume_smoothing_factor * vol_sun_boost
                             )
                             volume_change = self.smoothed_volume - old_volume
 
@@ -1293,24 +1330,33 @@ class AdaptiveBrightnessVolumeController:
 
                     # Auto-exit: check convergence after warmup
                     if self.auto_exit and not self.is_in_warmup:
-                        b_stable = (_last_target_brightness is not None and
-                                    abs(self.smoothed_brightness - _last_target_brightness) < _converge_threshold)
+                        b_stable = (
+                            _last_target_brightness is not None
+                            and abs(self.smoothed_brightness - _last_target_brightness) < _converge_threshold
+                        )
                         v_stable = (not AUDIO_AVAILABLE or not self.is_audio_in_warmup) and (
-                            not AUDIO_AVAILABLE or (
-                                _last_target_volume is not None and
-                                abs(self.smoothed_volume - _last_target_volume) < _converge_threshold))
+                            not AUDIO_AVAILABLE
+                            or (
+                                _last_target_volume is not None
+                                and abs(self.smoothed_volume - _last_target_volume) < _converge_threshold
+                            )
+                        )
                         if b_stable and v_stable:
                             _converge_count += 1
                         else:
                             _converge_count = 0
-                        _last_target_brightness = target_brightness if camera_brightness is not None else _last_target_brightness
+                        _last_target_brightness = (
+                            target_brightness if camera_brightness is not None else _last_target_brightness
+                        )
                         _last_target_volume = target_volume if AUDIO_AVAILABLE else _last_target_volume
                         if _converge_count >= _converge_required:
                             elapsed = time.time() - start_time
                             window_info = f" ({self.sun_window} window)" if self.sun_window else ""
-                            print(f"\nConverged in {elapsed:.1f}s{window_info} — "
-                                  f"brightness: {self.smoothed_brightness:.1f}%, "
-                                  f"volume: {self.smoothed_volume:.1f}%")
+                            print(
+                                f"\nConverged in {elapsed:.1f}s{window_info} — "
+                                f"brightness: {self.smoothed_brightness:.1f}%, "
+                                f"volume: {self.smoothed_volume:.1f}%"
+                            )
                             break
 
                     if current_time - last_brightness_change_time > 10:
@@ -1348,7 +1394,7 @@ class AdaptiveBrightnessVolumeController:
                 pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     os.makedirs(os.path.expanduser("~/.cache/adaptive-controller"), exist_ok=True)
 
     if not AUDIO_AVAILABLE:
@@ -1390,4 +1436,5 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()

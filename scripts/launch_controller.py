@@ -6,13 +6,10 @@ This script launches the optimized Rust binary with proper signal handling
 and provides a Python interface for integration with existing scripts.
 """
 
-import os
-import sys
 import signal
 import subprocess
-import time
+import sys
 from pathlib import Path
-from typing import Optional
 
 # Find project root
 SCRIPT_DIR = Path(__file__).parent.absolute()
@@ -26,7 +23,7 @@ class RustController:
 
     def __init__(self, use_debug: bool = False):
         self.binary = RUST_BINARY_DEBUG if use_debug else RUST_BINARY
-        self.process: Optional[subprocess.Popen] = None
+        self.process: subprocess.Popen | None = None
 
     def is_built(self) -> bool:
         """Check if the binary is built."""
@@ -38,11 +35,7 @@ class RustController:
         mode = "release" if release else "dev"
 
         try:
-            result = subprocess.run(
-                [str(build_script), mode],
-                cwd=PROJECT_DIR,
-                check=True
-            )
+            result = subprocess.run([str(build_script), mode], cwd=PROJECT_DIR, check=True)
             return result.returncode == 0
         except subprocess.CalledProcessError:
             return False
@@ -60,11 +53,7 @@ class RustController:
 
         try:
             self.process = subprocess.Popen(
-                [str(self.binary)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                [str(self.binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
             )
 
             # Read initial output
@@ -77,7 +66,7 @@ class RustController:
                     line = self.process.stdout.readline()
                     if line:
                         print(line.rstrip())
-                except:
+                except Exception:
                     break
 
             return self.process.poll() is None
@@ -128,24 +117,10 @@ def main():
     """Main entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Launch the Rust adaptive brightness/volume controller"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Use debug build instead of release"
-    )
-    parser.add_argument(
-        "--build-only",
-        action="store_true",
-        help="Only build, don't run"
-    )
-    parser.add_argument(
-        "--background",
-        action="store_true",
-        help="Run in background"
-    )
+    parser = argparse.ArgumentParser(description="Launch the Rust adaptive brightness/volume controller")
+    parser.add_argument("--debug", action="store_true", help="Use debug build instead of release")
+    parser.add_argument("--build-only", action="store_true", help="Only build, don't run")
+    parser.add_argument("--background", action="store_true", help="Run in background")
 
     args = parser.parse_args()
 
