@@ -12,18 +12,18 @@ from datetime import datetime
 
 # === CONFIG ===
 CONFIG = {
-    'fps': 30,
-    'switch_interval': 7 * 60 * 1000,  # 7 minutes in ms
-    'rotation_speed': 0.008,
-    'color_cycle_speed': 0.004,
-    'num_stars': 40,
-    'star_speed': 0.3,
-    'star_size': 3,
-    'bg_color': '#06080c',
-    'line_width': 3,
-    'num_trail_points': 500,
-    'clock_height': 80,
-    'clock_font_size': 48,
+    "fps": 30,
+    "switch_interval": 7 * 60 * 1000,  # 7 minutes in ms
+    "rotation_speed": 0.008,
+    "color_cycle_speed": 0.004,
+    "num_stars": 40,
+    "star_speed": 0.3,
+    "star_size": 3,
+    "bg_color": "#06080c",
+    "line_width": 3,
+    "num_trail_points": 500,
+    "clock_height": 80,
+    "clock_font_size": 48,
 }
 
 
@@ -35,9 +35,9 @@ def hsv_to_hex(h: float, s: float, v: float) -> str:
         f = (h * 6) - i
         p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
         rgb = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i]
-        return f'#{int(rgb[0]*255):02x}{int(rgb[1]*255):02x}{int(rgb[2]*255):02x}'
+        return f"#{int(rgb[0] * 255):02x}{int(rgb[1] * 255):02x}{int(rgb[2] * 255):02x}"
     except Exception:
-        return '#8080ff'
+        return "#8080ff"
 
 
 # =============================================================================
@@ -45,6 +45,7 @@ def hsv_to_hex(h: float, s: float, v: float) -> str:
 # =============================================================================
 class Tesseract:
     """4D Hypercube projection"""
+
     name = "4D Tesseract"
     num_lines = 32
 
@@ -52,15 +53,19 @@ class Tesseract:
         self.angle_xy = self.angle_zw = self.angle_xz = self.angle_yz = 0.0
         self.hue_offset = 0.0
         self.vertices_4d = [[x, y, z, w] for x in [-1, 1] for y in [-1, 1] for z in [-1, 1] for w in [-1, 1]]
-        self.edges = [(i, j) for i in range(16) for j in range(i + 1, 16)
-                      if sum(1 for k in range(4) if self.vertices_4d[i][k] != self.vertices_4d[j][k]) == 1]
+        self.edges = [
+            (i, j)
+            for i in range(16)
+            for j in range(i + 1, 16)
+            if sum(1 for k in range(4) if self.vertices_4d[i][k] != self.vertices_4d[j][k]) == 1
+        ]
 
     def update(self):
-        self.angle_xy += CONFIG['rotation_speed'] * 1.5
-        self.angle_zw += CONFIG['rotation_speed'] * 1.05
-        self.angle_xz += CONFIG['rotation_speed']
-        self.angle_yz += CONFIG['rotation_speed'] * 0.5
-        self.hue_offset += CONFIG['color_cycle_speed']
+        self.angle_xy += CONFIG["rotation_speed"] * 1.5
+        self.angle_zw += CONFIG["rotation_speed"] * 1.05
+        self.angle_xz += CONFIG["rotation_speed"]
+        self.angle_yz += CONFIG["rotation_speed"] * 0.5
+        self.hue_offset += CONFIG["color_cycle_speed"]
 
     def get_edges(self, width, height):
         try:
@@ -80,14 +85,14 @@ class Tesseract:
                 x3, y3, z3 = x * s4, y * s4, z * s4
                 s3 = d3 / (d3 - z3)
                 size = min(width, height) * 0.14
-                projected.append((width/2 + x3*s3*size, height/2 - y3*s3*size, (w+1)/2, s4*s3))
+                projected.append((width / 2 + x3 * s3 * size, height / 2 - y3 * s3 * size, (w + 1) / 2, s4 * s3))
             edges = []
             for idx, (i, j) in enumerate(self.edges):
                 x1, y1, d1, s1 = projected[i]
                 x2, y2, d2, s2 = projected[j]
                 hue = (idx / len(self.edges) + self.hue_offset) % 1.0
-                color = hsv_to_hex(hue, 0.7 + (d1+d2)/4*0.3, 0.6 + (d1+d2)/4*0.4)
-                lw = max(1, int(CONFIG['line_width'] * (s1 + s2) / 2))
+                color = hsv_to_hex(hue, 0.7 + (d1 + d2) / 4 * 0.3, 0.6 + (d1 + d2) / 4 * 0.4)
+                lw = max(1, int(CONFIG["line_width"] * (s1 + s2) / 2))
                 edges.append((x1, y1, x2, y2, color, lw))
             return edges
         except Exception:
@@ -99,6 +104,7 @@ class Tesseract:
 # =============================================================================
 class SacredMandala:
     """Flower of Life inspired mandala with rotating petals"""
+
     name = "Sacred Mandala"
     num_lines = 250
 
@@ -132,14 +138,21 @@ class SacredMandala:
 
                 # Petal outline
                 for i in range(self.n_petals):
-                    edges.append((pts[i][0], pts[i][1], pts[(i+1) % self.n_petals][0], pts[(i+1) % self.n_petals][1],
-                                 hsv_to_hex((hue + i * 0.05) % 1, 0.8, 0.7), 2))
+                    edges.append(
+                        (
+                            pts[i][0],
+                            pts[i][1],
+                            pts[(i + 1) % self.n_petals][0],
+                            pts[(i + 1) % self.n_petals][1],
+                            hsv_to_hex((hue + i * 0.05) % 1, 0.8, 0.7),
+                            2,
+                        )
+                    )
 
                 # Flower connections - every other petal
                 for i in range(self.n_petals):
                     j = (i + 2) % self.n_petals
-                    edges.append((pts[i][0], pts[i][1], pts[j][0], pts[j][1],
-                                 hsv_to_hex((hue + 0.3) % 1, 0.6, 0.5), 1))
+                    edges.append((pts[i][0], pts[i][1], pts[j][0], pts[j][1], hsv_to_hex((hue + 0.3) % 1, 0.6, 0.5), 1))
 
             # Inter-layer spokes
             for layer in range(self.n_layers - 1):
@@ -163,6 +176,7 @@ class SacredMandala:
 # =============================================================================
 class SpiralingIcosahedron:
     """3D Icosahedron with spiraling vertex trails"""
+
     name = "Spiraling Icosahedron"
     num_lines = 350
 
@@ -172,14 +186,50 @@ class SpiralingIcosahedron:
         self.angle_x = self.angle_y = self.angle_z = 0.0
         phi = (1 + math.sqrt(5)) / 2
         self.base_verts = [
-            (0, 1, phi), (0, -1, phi), (0, 1, -phi), (0, -1, -phi),
-            (1, phi, 0), (-1, phi, 0), (1, -phi, 0), (-1, -phi, 0),
-            (phi, 0, 1), (-phi, 0, 1), (phi, 0, -1), (-phi, 0, -1)
+            (0, 1, phi),
+            (0, -1, phi),
+            (0, 1, -phi),
+            (0, -1, -phi),
+            (1, phi, 0),
+            (-1, phi, 0),
+            (1, -phi, 0),
+            (-1, -phi, 0),
+            (phi, 0, 1),
+            (-phi, 0, 1),
+            (phi, 0, -1),
+            (-phi, 0, -1),
         ]
         self.edges_idx = [
-            (0,1), (0,4), (0,5), (0,8), (0,9), (1,6), (1,7), (1,8), (1,9),
-            (2,3), (2,4), (2,5), (2,10), (2,11), (3,6), (3,7), (3,10), (3,11),
-            (4,5), (4,8), (4,10), (5,9), (5,11), (6,7), (6,8), (6,10), (7,9), (7,11), (8,10), (9,11)
+            (0, 1),
+            (0, 4),
+            (0, 5),
+            (0, 8),
+            (0, 9),
+            (1, 6),
+            (1, 7),
+            (1, 8),
+            (1, 9),
+            (2, 3),
+            (2, 4),
+            (2, 5),
+            (2, 10),
+            (2, 11),
+            (3, 6),
+            (3, 7),
+            (3, 10),
+            (3, 11),
+            (4, 5),
+            (4, 8),
+            (4, 10),
+            (5, 9),
+            (5, 11),
+            (6, 7),
+            (6, 8),
+            (6, 10),
+            (7, 9),
+            (7, 11),
+            (8, 10),
+            (9, 11),
         ]
         self.trails = [[] for _ in range(12)]
 
@@ -232,8 +282,16 @@ class SpiralingIcosahedron:
                 for ti in range(1, len(trail)):
                     t = ti / len(trail)
                     hue = (vi / 12 + self.hue_offset + 0.5) % 1.0
-                    edges.append((trail[ti-1][0], trail[ti-1][1], trail[ti][0], trail[ti][1],
-                                 hsv_to_hex(hue, 0.6, t * 0.5), 1))
+                    edges.append(
+                        (
+                            trail[ti - 1][0],
+                            trail[ti - 1][1],
+                            trail[ti][0],
+                            trail[ti][1],
+                            hsv_to_hex(hue, 0.6, t * 0.5),
+                            1,
+                        )
+                    )
 
             return edges
         except Exception:
@@ -245,6 +303,7 @@ class SpiralingIcosahedron:
 # =============================================================================
 class LotusMandala:
     """Multi-layered lotus flower mandala"""
+
     name = "Lotus Mandala"
     num_lines = 300
 
@@ -313,6 +372,7 @@ class LotusMandala:
 # =============================================================================
 class RotatingDodecahedron:
     """3D Dodecahedron with smooth rotation"""
+
     name = "Dodecahedron"
     num_lines = 30
 
@@ -322,17 +382,58 @@ class RotatingDodecahedron:
         phi = (1 + math.sqrt(5)) / 2
         ip = 1 / phi
         self.verts = [
-            (1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
-            (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1),
-            (0, ip, phi), (0, ip, -phi), (0, -ip, phi), (0, -ip, -phi),
-            (ip, phi, 0), (ip, -phi, 0), (-ip, phi, 0), (-ip, -phi, 0),
-            (phi, 0, ip), (phi, 0, -ip), (-phi, 0, ip), (-phi, 0, -ip)
+            (1, 1, 1),
+            (1, 1, -1),
+            (1, -1, 1),
+            (1, -1, -1),
+            (-1, 1, 1),
+            (-1, 1, -1),
+            (-1, -1, 1),
+            (-1, -1, -1),
+            (0, ip, phi),
+            (0, ip, -phi),
+            (0, -ip, phi),
+            (0, -ip, -phi),
+            (ip, phi, 0),
+            (ip, -phi, 0),
+            (-ip, phi, 0),
+            (-ip, -phi, 0),
+            (phi, 0, ip),
+            (phi, 0, -ip),
+            (-phi, 0, ip),
+            (-phi, 0, -ip),
         ]
         self.edges_idx = [
-            (0,8), (0,12), (0,16), (1,9), (1,12), (1,17), (2,10), (2,13), (2,16),
-            (3,11), (3,13), (3,17), (4,8), (4,14), (4,18), (5,9), (5,14), (5,19),
-            (6,10), (6,15), (6,18), (7,11), (7,15), (7,19), (8,10), (9,11),
-            (12,14), (13,15), (16,17), (18,19)
+            (0, 8),
+            (0, 12),
+            (0, 16),
+            (1, 9),
+            (1, 12),
+            (1, 17),
+            (2, 10),
+            (2, 13),
+            (2, 16),
+            (3, 11),
+            (3, 13),
+            (3, 17),
+            (4, 8),
+            (4, 14),
+            (4, 18),
+            (5, 9),
+            (5, 14),
+            (5, 19),
+            (6, 10),
+            (6, 15),
+            (6, 18),
+            (7, 11),
+            (7, 15),
+            (7, 19),
+            (8, 10),
+            (9, 11),
+            (12, 14),
+            (13, 15),
+            (16, 17),
+            (18, 19),
         ]
 
     def update(self):
@@ -378,6 +479,7 @@ class RotatingDodecahedron:
 # =============================================================================
 class SriYantra:
     """Sri Yantra sacred geometry with rotating triangles"""
+
     name = "Sri Yantra"
     num_lines = 200
 
@@ -432,8 +534,16 @@ class SriYantra:
                     a = up_rot + i * 2 * math.pi / 3 - math.pi / 2
                     pts_up.append((cx + r * math.cos(a), cy + r * math.sin(a)))
                 for i in range(3):
-                    edges.append((pts_up[i][0], pts_up[i][1], pts_up[(i+1)%3][0], pts_up[(i+1)%3][1],
-                                 hsv_to_hex(hue, 0.8, 0.7), 2))
+                    edges.append(
+                        (
+                            pts_up[i][0],
+                            pts_up[i][1],
+                            pts_up[(i + 1) % 3][0],
+                            pts_up[(i + 1) % 3][1],
+                            hsv_to_hex(hue, 0.8, 0.7),
+                            2,
+                        )
+                    )
 
                 # Downward triangle
                 down_rot = -self.inner_rot - ti * 0.1
@@ -443,8 +553,16 @@ class SriYantra:
                     a = down_rot + i * 2 * math.pi / 3 + math.pi / 2
                     pts_down.append((cx + r * 0.9 * math.cos(a), cy + r * 0.9 * math.sin(a)))
                 for i in range(3):
-                    edges.append((pts_down[i][0], pts_down[i][1], pts_down[(i+1)%3][0], pts_down[(i+1)%3][1],
-                                 hsv_to_hex(hue2, 0.8, 0.7), 2))
+                    edges.append(
+                        (
+                            pts_down[i][0],
+                            pts_down[i][1],
+                            pts_down[(i + 1) % 3][0],
+                            pts_down[(i + 1) % 3][1],
+                            hsv_to_hex(hue2, 0.8, 0.7),
+                            2,
+                        )
+                    )
 
             # Central bindu (point)
             bindu_r = max_r * 0.05
@@ -465,6 +583,7 @@ class SriYantra:
 # =============================================================================
 class Merkaba:
     """3D Merkaba / Star Tetrahedron"""
+
     name = "Merkaba"
     num_lines = 24
 
@@ -475,8 +594,8 @@ class Merkaba:
         # Two interlocking tetrahedra
         self.tetra1 = [(s, s, s), (s, -s, -s), (-s, s, -s), (-s, -s, s)]
         self.tetra2 = [(-s, -s, -s), (-s, s, s), (s, -s, s), (s, s, -s)]
-        self.edges1 = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
-        self.edges2 = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
+        self.edges1 = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        self.edges2 = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     def update(self):
         self.angle_x += 0.008
@@ -525,6 +644,7 @@ class Merkaba:
 # =============================================================================
 class Cell24:
     """4D polytope with 24 octahedral cells - one of the most beautiful 4D shapes"""
+
     name = "4D 24-Cell"
     num_lines = 96
 
@@ -550,7 +670,7 @@ class Cell24:
         self.edges_idx = []
         for i in range(24):
             for j in range(i + 1, 24):
-                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                d = sum((self.verts[i][k] - self.verts[j][k]) ** 2 for k in range(4))
                 if abs(d - 1.0) < 0.01:
                     self.edges_idx.append((i, j))
 
@@ -623,6 +743,7 @@ class Cell24:
 # =============================================================================
 class KaleidoscopeMandala:
     """Dynamic kaleidoscope with mirrored segments"""
+
     name = "Kaleidoscope"
     num_lines = 300
 
@@ -632,23 +753,25 @@ class KaleidoscopeMandala:
         self.n_mirrors = random.choice([6, 8, 10, 12])
         self.shapes = []
         for _ in range(15):
-            self.shapes.append({
-                'r': random.random() * 0.7 + 0.1,
-                'a': random.random() * math.pi * 2,
-                'dr': (random.random() - 0.5) * 0.003,
-                'da': (random.random() - 0.5) * 0.02,
-                'size': random.random() * 0.08 + 0.03,
-                'sides': random.choice([3, 4, 5, 6])
-            })
+            self.shapes.append(
+                {
+                    "r": random.random() * 0.7 + 0.1,
+                    "a": random.random() * math.pi * 2,
+                    "dr": (random.random() - 0.5) * 0.003,
+                    "da": (random.random() - 0.5) * 0.02,
+                    "size": random.random() * 0.08 + 0.03,
+                    "sides": random.choice([3, 4, 5, 6]),
+                }
+            )
 
     def update(self):
         self.t += 0.008
         self.hue_offset += 0.004
         for s in self.shapes:
-            s['r'] += s['dr']
-            s['a'] += s['da']
-            if s['r'] < 0.1 or s['r'] > 0.8:
-                s['dr'] *= -1
+            s["r"] += s["dr"]
+            s["a"] += s["da"]
+            if s["r"] < 0.1 or s["r"] > 0.8:
+                s["dr"] *= -1
 
     def get_edges(self, width, height):
         try:
@@ -662,20 +785,28 @@ class KaleidoscopeMandala:
                 for m in range(self.n_mirrors):
                     mirror_a = m * 2 * math.pi / self.n_mirrors
                     # Shape position
-                    sr = shape['r'] * max_r
-                    sa = shape['a'] + mirror_a
+                    sr = shape["r"] * max_r
+                    sa = shape["a"] + mirror_a
                     scx = cx + sr * math.cos(sa)
                     scy = cy + sr * math.sin(sa)
                     # Draw polygon
-                    sz = shape['size'] * max_r
+                    sz = shape["size"] * max_r
                     pts = []
-                    for i in range(shape['sides']):
-                        pa = self.t + i * 2 * math.pi / shape['sides'] + mirror_a
+                    for i in range(shape["sides"]):
+                        pa = self.t + i * 2 * math.pi / shape["sides"] + mirror_a
                         pts.append((scx + sz * math.cos(pa), scy + sz * math.sin(pa)))
-                    for i in range(shape['sides']):
+                    for i in range(shape["sides"]):
                         hue = (hue_base + m * 0.02) % 1.0
-                        edges.append((pts[i][0], pts[i][1], pts[(i+1) % shape['sides']][0], pts[(i+1) % shape['sides']][1],
-                                     hsv_to_hex(hue, 0.8, 0.7), 2))
+                        edges.append(
+                            (
+                                pts[i][0],
+                                pts[i][1],
+                                pts[(i + 1) % shape["sides"]][0],
+                                pts[(i + 1) % shape["sides"]][1],
+                                hsv_to_hex(hue, 0.8, 0.7),
+                                2,
+                            )
+                        )
 
             # Mirror lines from center
             for m in range(self.n_mirrors):
@@ -695,6 +826,7 @@ class KaleidoscopeMandala:
 # =============================================================================
 class StellatedDodecahedron:
     """3D Great Stellated Dodecahedron"""
+
     name = "Stellated Dodecahedron"
     num_lines = 90
 
@@ -711,12 +843,14 @@ class StellatedDodecahedron:
                 self.verts.append((s2 * phi, 0, s1))
         # Stellate by extending vertices
         self.stell_factor = phi * phi
-        self.spike_verts = [(v[0] * self.stell_factor, v[1] * self.stell_factor, v[2] * self.stell_factor) for v in self.verts]
+        self.spike_verts = [
+            (v[0] * self.stell_factor, v[1] * self.stell_factor, v[2] * self.stell_factor) for v in self.verts
+        ]
         # Edges: connect spikes to neighbors
         self.edges_idx = []
         for i in range(12):
             for j in range(i + 1, 12):
-                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(3))
+                d = sum((self.verts[i][k] - self.verts[j][k]) ** 2 for k in range(3))
                 if d < 5:  # Adjacent vertices
                     self.edges_idx.append((i, j))
 
@@ -783,6 +917,7 @@ class StellatedDodecahedron:
 # =============================================================================
 class HarmonicRose:
     """Rose curves (rhodonea) forming harmonic mandala"""
+
     name = "Harmonic Rose"
     num_lines = 400
 
@@ -840,6 +975,7 @@ class HarmonicRose:
 # =============================================================================
 class Hyperdodecahedron:
     """Partial 4D 120-Cell - the most complex regular 4D polytope"""
+
     name = "4D Hyperdodecahedron"
     num_lines = 150
 
@@ -853,7 +989,7 @@ class Hyperdodecahedron:
         # Subset of 120-cell vertices (using key symmetry points)
         self.verts = []
         # Permutations of (±2, ±2, 0, 0)
-        for p in [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]:
+        for p in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]:
             for s1 in [-1, 1]:
                 for s2 in [-1, 1]:
                     v = [0, 0, 0, 0]
@@ -873,7 +1009,7 @@ class Hyperdodecahedron:
         self.edges_idx = []
         for i in range(len(self.verts)):
             for j in range(i + 1, len(self.verts)):
-                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                d = sum((self.verts[i][k] - self.verts[j][k]) ** 2 for k in range(4))
                 if 3.5 < d < 4.5:  # Edge length ~2
                     self.edges_idx.append((i, j))
 
@@ -888,12 +1024,17 @@ class Hyperdodecahedron:
 
     def _rotate4d(self, v):
         x, y, z, w = v
-        for angle, (a, b) in [(self.angle_xy, (0,1)), (self.angle_xz, (0,2)),
-                               (self.angle_xw, (0,3)), (self.angle_yz, (1,2)),
-                               (self.angle_yw, (1,3)), (self.angle_zw, (2,3))]:
+        for angle, (a, b) in [
+            (self.angle_xy, (0, 1)),
+            (self.angle_xz, (0, 2)),
+            (self.angle_xw, (0, 3)),
+            (self.angle_yz, (1, 2)),
+            (self.angle_yw, (1, 3)),
+            (self.angle_zw, (2, 3)),
+        ]:
             c, s = math.cos(angle), math.sin(angle)
             coords = [x, y, z, w]
-            coords[a], coords[b] = coords[a]*c - coords[b]*s, coords[a]*s + coords[b]*c
+            coords[a], coords[b] = coords[a] * c - coords[b] * s, coords[a] * s + coords[b] * c
             x, y, z, w = coords
         return x, y, z, w
 
@@ -910,7 +1051,7 @@ class Hyperdodecahedron:
                 x3, y3, z3 = x * s4, y * s4, z * s4
                 d3 = 6.0
                 s3 = d3 / (d3 - z3)
-                projected.append((cx + x3*s3*size, cy - y3*s3*size, w, s4*s3))
+                projected.append((cx + x3 * s3 * size, cy - y3 * s3 * size, w, s4 * s3))
 
             for idx, (i, j) in enumerate(self.edges_idx):
                 x1, y1, w1, s1 = projected[i]
@@ -929,6 +1070,7 @@ class Hyperdodecahedron:
 # =============================================================================
 class CosmicWeb:
     """3D network of interconnected nodes forming a cosmic web structure"""
+
     name = "Cosmic Web"
     num_lines = 400
 
@@ -940,20 +1082,22 @@ class CosmicWeb:
         self.n_nodes = 35
         self.nodes = []
         for _ in range(self.n_nodes):
-            self.nodes.append({
-                'x': (random.random() - 0.5) * 2,
-                'y': (random.random() - 0.5) * 2,
-                'z': (random.random() - 0.5) * 2,
-                'vx': (random.random() - 0.5) * 0.002,
-                'vy': (random.random() - 0.5) * 0.002,
-                'vz': (random.random() - 0.5) * 0.002,
-                'pulse': random.random() * math.pi * 2
-            })
+            self.nodes.append(
+                {
+                    "x": (random.random() - 0.5) * 2,
+                    "y": (random.random() - 0.5) * 2,
+                    "z": (random.random() - 0.5) * 2,
+                    "vx": (random.random() - 0.5) * 0.002,
+                    "vy": (random.random() - 0.5) * 0.002,
+                    "vz": (random.random() - 0.5) * 0.002,
+                    "pulse": random.random() * math.pi * 2,
+                }
+            )
         # Build edges - connect nearby nodes
         self.edges_idx = []
         for i in range(self.n_nodes):
             for j in range(i + 1, self.n_nodes):
-                d = sum((self.nodes[i][k] - self.nodes[j][k])**2 for k in ['x', 'y', 'z'])
+                d = sum((self.nodes[i][k] - self.nodes[j][k]) ** 2 for k in ["x", "y", "z"])
                 if d < 0.8:
                     self.edges_idx.append((i, j))
 
@@ -965,14 +1109,14 @@ class CosmicWeb:
         self.hue_offset += 0.003
         # Animate nodes
         for n in self.nodes:
-            n['x'] += n['vx']
-            n['y'] += n['vy']
-            n['z'] += n['vz']
-            n['pulse'] += 0.05
+            n["x"] += n["vx"]
+            n["y"] += n["vy"]
+            n["z"] += n["vz"]
+            n["pulse"] += 0.05
             # Bounce off boundaries
-            for k in ['x', 'y', 'z']:
+            for k in ["x", "y", "z"]:
                 if abs(n[k]) > 1:
-                    n['v' + k] *= -1
+                    n["v" + k] *= -1
 
     def _rotate(self, x, y, z):
         cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
@@ -992,11 +1136,11 @@ class CosmicWeb:
             # Project nodes
             projected = []
             for n in self.nodes:
-                x, y, z = self._rotate(n['x'], n['y'], n['z'])
+                x, y, z = self._rotate(n["x"], n["y"], n["z"])
                 d = 4.0
                 s = d / (d - z)
                 px, py = cx + x * s * size, cy - y * s * size
-                pulse = 0.5 + 0.5 * math.sin(n['pulse'])
+                pulse = 0.5 + 0.5 * math.sin(n["pulse"])
                 projected.append((px, py, z, s, pulse))
 
             # Draw edges
@@ -1009,7 +1153,7 @@ class CosmicWeb:
                 edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, brightness), lw))
 
             # Draw node halos
-            for i, (px, py, z, s, pulse) in enumerate(projected):
+            for i, (px, py, _z, s, pulse) in enumerate(projected):
                 hue = (i / self.n_nodes + self.hue_offset + 0.5) % 1.0
                 r = 8 * s * (0.7 + 0.3 * pulse)
                 n_seg = 8
@@ -1030,13 +1174,14 @@ class CosmicWeb:
 # =============================================================================
 class UzumakiSpiral3D:
     """3D Curlicue Fractal spiral with hypnotic rotation"""
+
     name = "Uzumaki Spiral"
     num_lines = 450
 
     def __init__(self):
         self.angle_xz = 0.0  # Rotation around Y axis
         self.angle_yz = 0.0  # Tilt
-        self.t = 0.0         # Time parameter for spiral evolution
+        self.t = 0.0  # Time parameter for spiral evolution
         self.hue_offset = 0.0
         self.n_points = 380
         self.s = 2.39996323  # Silver ratio - creates beautiful curlicue pattern
@@ -1044,7 +1189,7 @@ class UzumakiSpiral3D:
     def update(self):
         self.angle_xz += 0.011  # Smooth rotation
         self.angle_yz += 0.004  # Slow tilt
-        self.t += 0.006        # Spiral evolution
+        self.t += 0.006  # Spiral evolution
         self.hue_offset += 0.003
 
     def get_edges(self, width, height):
@@ -1112,8 +1257,7 @@ class UzumakiSpiral3D:
                 avg_scale = (s1 + s2) / 2
                 lw = max(1, min(4, int(avg_scale * 1.8)))
 
-                edges.append((x1, y1, x2, y2,
-                             hsv_to_hex(hue, saturation, brightness), lw))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, saturation, brightness), lw))
 
             return edges
         except Exception:
@@ -1125,6 +1269,7 @@ class UzumakiSpiral3D:
 # =============================================================================
 class FourierEpicycles:
     """Epicycles drawing complex shapes - Fourier transform visualization"""
+
     name = "Fourier Epicycles"
     num_lines = 650  # circles(8*24=192) + arms(8) + trail(400) + buffer
 
@@ -1153,7 +1298,7 @@ class FourierEpicycles:
             y += r * math.sin(freq * self.t + phase)
         self.trail.append((x, y))
         if len(self.trail) > self.max_trail:
-            self.trail = self.trail[-self.max_trail:]
+            self.trail = self.trail[-self.max_trail :]
 
     def get_edges(self, width, height):
         try:
@@ -1179,17 +1324,24 @@ class FourierEpicycles:
                 # Arm to next center
                 nx = x + r * math.cos(freq * self.t + phase)
                 ny = y + r * math.sin(freq * self.t + phase)
-                edges.append((cx + x * size, cy - y * size,
-                             cx + nx * size, cy - ny * size,
-                             hsv_to_hex(hue, 0.9, 0.85), 2))
+                edges.append(
+                    (cx + x * size, cy - y * size, cx + nx * size, cy - ny * size, hsv_to_hex(hue, 0.9, 0.85), 2)
+                )
                 x, y = nx, ny
 
             # Connect final pendulum position to trail start (if trail exists)
             if len(self.trail) > 0:
                 tx, ty = self.trail[-1]
-                edges.append((cx + x * size, cy - y * size,
-                             cx + tx * size, cy - ty * size,
-                             hsv_to_hex((self.hue_offset + 0.5) % 1.0, 0.95, 0.9), 3))
+                edges.append(
+                    (
+                        cx + x * size,
+                        cy - y * size,
+                        cx + tx * size,
+                        cy - ty * size,
+                        hsv_to_hex((self.hue_offset + 0.5) % 1.0, 0.95, 0.9),
+                        3,
+                    )
+                )
 
             # Draw trail
             for i in range(1, len(self.trail)):
@@ -1197,9 +1349,16 @@ class FourierEpicycles:
                 hue = (t + self.hue_offset + 0.5) % 1.0
                 x1, y1 = self.trail[i - 1]
                 x2, y2 = self.trail[i]
-                edges.append((cx + x1 * size, cy - y1 * size,
-                             cx + x2 * size, cy - y2 * size,
-                             hsv_to_hex(hue, 0.9, 0.5 + t * 0.5), 3))
+                edges.append(
+                    (
+                        cx + x1 * size,
+                        cy - y1 * size,
+                        cx + x2 * size,
+                        cy - y2 * size,
+                        hsv_to_hex(hue, 0.9, 0.5 + t * 0.5),
+                        3,
+                    )
+                )
 
             return edges
         except Exception:
@@ -1211,6 +1370,7 @@ class FourierEpicycles:
 # =============================================================================
 class GeodesicSphere:
     """Slowly rotating sphere made of triangles - icosahedron subdivision"""
+
     name = "Geodesic Sphere"
     num_lines = 400
 
@@ -1224,32 +1384,57 @@ class GeodesicSphere:
         # Generate icosahedron vertices
         phi = (1 + math.sqrt(5)) / 2  # Golden ratio
         self.base_verts = [
-            (-1, phi, 0), (1, phi, 0), (-1, -phi, 0), (1, -phi, 0),
-            (0, -1, phi), (0, 1, phi), (0, -1, -phi), (0, 1, -phi),
-            (phi, 0, -1), (phi, 0, 1), (-phi, 0, -1), (-phi, 0, 1)
+            (-1, phi, 0),
+            (1, phi, 0),
+            (-1, -phi, 0),
+            (1, -phi, 0),
+            (0, -1, phi),
+            (0, 1, phi),
+            (0, -1, -phi),
+            (0, 1, -phi),
+            (phi, 0, -1),
+            (phi, 0, 1),
+            (-phi, 0, -1),
+            (-phi, 0, 1),
         ]
         # Normalize to unit sphere
         self.base_verts = [self._normalize(v) for v in self.base_verts]
 
         # Icosahedron faces (20 triangles)
         self.base_faces = [
-            (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
-            (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
-            (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
-            (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)
+            (0, 11, 5),
+            (0, 5, 1),
+            (0, 1, 7),
+            (0, 7, 10),
+            (0, 10, 11),
+            (1, 5, 9),
+            (5, 11, 4),
+            (11, 10, 2),
+            (10, 7, 6),
+            (7, 1, 8),
+            (3, 9, 4),
+            (3, 4, 2),
+            (3, 2, 6),
+            (3, 6, 8),
+            (3, 8, 9),
+            (4, 9, 5),
+            (2, 4, 11),
+            (6, 2, 10),
+            (8, 6, 7),
+            (9, 8, 1),
         ]
 
         # Subdivide for smoother sphere
         self.vertices, self.edges = self._subdivide_icosahedron()
 
     def _normalize(self, v):
-        length = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+        length = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
         if length < 0.0001:
             return (0, 0, 1)
-        return (v[0]/length, v[1]/length, v[2]/length)
+        return (v[0] / length, v[1] / length, v[2] / length)
 
     def _midpoint(self, v1, v2):
-        mid = ((v1[0]+v2[0])/2, (v1[1]+v2[1])/2, (v1[2]+v2[2])/2)
+        mid = ((v1[0] + v2[0]) / 2, (v1[1] + v2[1]) / 2, (v1[2] + v2[2]) / 2)
         return self._normalize(mid)  # Project to sphere
 
     def _subdivide_icosahedron(self):
@@ -1273,10 +1458,7 @@ class GeodesicSphere:
                     mids.append(edge_cache[key])
 
                 m01, m12, m20 = mids
-                new_faces.extend([
-                    (v0, m01, m20), (v1, m12, m01),
-                    (v2, m20, m12), (m01, m12, m20)
-                ])
+                new_faces.extend([(v0, m01, m20), (v1, m12, m01), (v2, m20, m12), (m01, m12, m20)])
             faces = new_faces
 
         # Extract unique edges from faces
@@ -1339,8 +1521,7 @@ class GeodesicSphere:
 
                 lw = max(1, int((s1 + s2) / 2 * 1.5))
 
-                edges.append((x1, y1, x2, y2,
-                             hsv_to_hex(hue, saturation, brightness), lw))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, saturation, brightness), lw))
 
             return edges
         except Exception:
@@ -1352,6 +1533,7 @@ class GeodesicSphere:
 # =============================================================================
 class BouncingParticles:
     """Particles bouncing off walls and obstacles - dynamic simulation"""
+
     name = "Bouncing Particles"
     num_lines = 500
 
@@ -1365,14 +1547,16 @@ class BouncingParticles:
         for i in range(self.n_particles):
             angle = random.random() * 2 * math.pi
             speed = random.uniform(3, 7)
-            self.particles.append({
-                'x': random.uniform(0.2, 0.8),
-                'y': random.uniform(0.2, 0.8),
-                'vx': math.cos(angle) * speed * 0.01,
-                'vy': math.sin(angle) * speed * 0.01,
-                'hue': i / self.n_particles,
-                'trail': []
-            })
+            self.particles.append(
+                {
+                    "x": random.uniform(0.2, 0.8),
+                    "y": random.uniform(0.2, 0.8),
+                    "vx": math.cos(angle) * speed * 0.01,
+                    "vy": math.sin(angle) * speed * 0.01,
+                    "hue": i / self.n_particles,
+                    "trail": [],
+                }
+            )
         self.obstacle_radius = 0.12
         self.obstacle_angle = 0.0
 
@@ -1384,45 +1568,45 @@ class BouncingParticles:
         # Update particles
         for p in self.particles:
             # Store trail
-            p['trail'].append((p['x'], p['y']))
-            if len(p['trail']) > self.trail_len:
-                p['trail'] = p['trail'][-self.trail_len:]
+            p["trail"].append((p["x"], p["y"]))
+            if len(p["trail"]) > self.trail_len:
+                p["trail"] = p["trail"][-self.trail_len :]
 
             # Move
-            p['x'] += p['vx']
-            p['y'] += p['vy']
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
 
             # Bounce off walls
-            if p['x'] < 0.08 or p['x'] > 0.92:
-                p['vx'] *= -1
-                p['x'] = max(0.08, min(0.92, p['x']))
-                p['hue'] = (p['hue'] + 0.1) % 1.0
-            if p['y'] < 0.12 or p['y'] > 0.88:
-                p['vy'] *= -1
-                p['y'] = max(0.12, min(0.88, p['y']))
-                p['hue'] = (p['hue'] + 0.1) % 1.0
+            if p["x"] < 0.08 or p["x"] > 0.92:
+                p["vx"] *= -1
+                p["x"] = max(0.08, min(0.92, p["x"]))
+                p["hue"] = (p["hue"] + 0.1) % 1.0
+            if p["y"] < 0.12 or p["y"] > 0.88:
+                p["vy"] *= -1
+                p["y"] = max(0.12, min(0.88, p["y"]))
+                p["hue"] = (p["hue"] + 0.1) % 1.0
 
             # Bounce off central obstacle (moving)
             obs_x = 0.5 + 0.15 * math.cos(self.obstacle_angle)
             obs_y = 0.5 + 0.15 * math.sin(self.obstacle_angle * 0.7)
-            dx = p['x'] - obs_x
-            dy = p['y'] - obs_y
-            dist = math.sqrt(dx*dx + dy*dy)
+            dx = p["x"] - obs_x
+            dy = p["y"] - obs_y
+            dist = math.sqrt(dx * dx + dy * dy)
             if dist < self.obstacle_radius and dist > 0.001:
                 # Normalize and reflect
                 nx, ny = dx / dist, dy / dist
-                dot = p['vx'] * nx + p['vy'] * ny
+                dot = p["vx"] * nx + p["vy"] * ny
                 if dot < 0:  # Moving towards obstacle
-                    p['vx'] -= 2 * dot * nx
-                    p['vy'] -= 2 * dot * ny
+                    p["vx"] -= 2 * dot * nx
+                    p["vy"] -= 2 * dot * ny
                     # Push out
-                    p['x'] = obs_x + nx * (self.obstacle_radius + 0.01)
-                    p['y'] = obs_y + ny * (self.obstacle_radius + 0.01)
-                    p['hue'] = (p['hue'] + 0.15) % 1.0
+                    p["x"] = obs_x + nx * (self.obstacle_radius + 0.01)
+                    p["y"] = obs_y + ny * (self.obstacle_radius + 0.01)
+                    p["hue"] = (p["hue"] + 0.15) % 1.0
 
     def get_edges(self, width, height):
         try:
-            cx, cy = width / 2, height / 2
+            _cx, _cy = width / 2, height / 2
             edges = []
 
             # Draw boundary rectangle
@@ -1431,7 +1615,7 @@ class BouncingParticles:
                 (margin, margin * 1.5),
                 (width - margin, margin * 1.5),
                 (width - margin, height - margin),
-                (margin, height - margin)
+                (margin, height - margin),
             ]
             for i in range(4):
                 x1, y1 = corners[i]
@@ -1460,24 +1644,22 @@ class BouncingParticles:
             w_inner = width - 2 * margin
             h_inner = height - margin * 2.5
             for p in self.particles:
-                trail = p['trail']
-                hue = (p['hue'] + self.hue_offset) % 1.0
+                trail = p["trail"]
+                hue = (p["hue"] + self.hue_offset) % 1.0
 
                 # Draw trail
                 for i in range(1, len(trail)):
                     t = i / len(trail)
-                    x1 = margin + trail[i-1][0] * w_inner
-                    y1 = margin * 1.5 + trail[i-1][1] * h_inner
+                    x1 = margin + trail[i - 1][0] * w_inner
+                    y1 = margin * 1.5 + trail[i - 1][1] * h_inner
                     x2 = margin + trail[i][0] * w_inner
                     y2 = margin * 1.5 + trail[i][1] * h_inner
                     trail_hue = (hue + (1 - t) * 0.2) % 1.0
-                    edges.append((x1, y1, x2, y2,
-                                 hsv_to_hex(trail_hue, 0.85, 0.3 + t * 0.6),
-                                 max(1, int(t * 3))))
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(trail_hue, 0.85, 0.3 + t * 0.6), max(1, int(t * 3))))
 
                 # Draw current position as small cross
-                px = margin + p['x'] * w_inner
-                py = margin * 1.5 + p['y'] * h_inner
+                px = margin + p["x"] * w_inner
+                py = margin * 1.5 + p["y"] * h_inner
                 size = 4
                 edges.append((px - size, py, px + size, py, hsv_to_hex(hue, 0.9, 0.95), 2))
                 edges.append((px, py - size, px, py + size, hsv_to_hex(hue, 0.9, 0.95), 2))
@@ -1492,6 +1674,7 @@ class BouncingParticles:
 # =============================================================================
 class TunnelFlight:
     """High-speed flight through a curved tunnel of rectangles"""
+
     name = "Tunnel Flight"
     num_lines = 500
 
@@ -1504,19 +1687,18 @@ class TunnelFlight:
         self.curve_freq_y = 0.3  # Curvature frequency Y
         self.curve_amp = 0.35  # Curvature amplitude
         # Initialize frame Z positions (0 = closest, 1 = farthest)
-        self.frames = [{'z': i / self.n_frames, 'phase': random.random() * math.pi * 2}
-                       for i in range(self.n_frames)]
+        self.frames = [{"z": i / self.n_frames, "phase": random.random() * math.pi * 2} for i in range(self.n_frames)]
 
     def update(self):
         self.t += self.speed
         self.hue_offset += 0.004
         # Move frames towards viewer
         for f in self.frames:
-            f['z'] -= self.speed * 0.08
+            f["z"] -= self.speed * 0.08
             # Respawn at far end when passing viewer
-            if f['z'] < 0.02:
-                f['z'] = 1.0
-                f['phase'] = random.random() * math.pi * 2
+            if f["z"] < 0.02:
+                f["z"] = 1.0
+                f["phase"] = random.random() * math.pi * 2
 
     def get_edges(self, width, height):
         try:
@@ -1524,10 +1706,10 @@ class TunnelFlight:
             edges = []
 
             # Sort frames by Z (far to near) for proper depth rendering
-            sorted_frames = sorted(self.frames, key=lambda f: -f['z'])
+            sorted_frames = sorted(self.frames, key=lambda f: -f["z"])
 
-            for fi, frame in enumerate(sorted_frames):
-                z = frame['z']
+            for _fi, frame in enumerate(sorted_frames):
+                z = frame["z"]
                 if z < 0.03:
                     continue  # Skip frames too close
 
@@ -1555,10 +1737,10 @@ class TunnelFlight:
 
                 # Four corners of rectangle (before rotation)
                 corners_local = [
-                    (-rect_w/2, -rect_h/2),
-                    (rect_w/2, -rect_h/2),
-                    (rect_w/2, rect_h/2),
-                    (-rect_w/2, rect_h/2)
+                    (-rect_w / 2, -rect_h / 2),
+                    (rect_w / 2, -rect_h / 2),
+                    (rect_w / 2, rect_h / 2),
+                    (-rect_w / 2, rect_h / 2),
                 ]
 
                 # Apply rotation and translate to frame center
@@ -1643,25 +1825,33 @@ class StarField:
     def __init__(self, width, height):
         self.width, self.height = max(1, width), max(1, height)
         self.hue_offset = 0.0
-        self.stars = [{'x': random.randint(0, self.width), 'y': random.randint(0, self.height),
-                       'z': random.random() * 2 + 0.5, 'brightness': random.uniform(0.3, 0.8),
-                       'hue': random.random()} for _ in range(CONFIG['num_stars'])]
+        self.stars = [
+            {
+                "x": random.randint(0, self.width),
+                "y": random.randint(0, self.height),
+                "z": random.random() * 2 + 0.5,
+                "brightness": random.uniform(0.3, 0.8),
+                "hue": random.random(),
+            }
+            for _ in range(CONFIG["num_stars"])
+        ]
 
     def update(self):
-        self.hue_offset += CONFIG['color_cycle_speed'] * 0.3
+        self.hue_offset += CONFIG["color_cycle_speed"] * 0.3
         for star in self.stars:
-            star['x'] -= CONFIG['star_speed'] * star['z']
-            if star['x'] < 0:
-                star['x'] = self.width
-                star['y'] = random.randint(0, max(1, self.height))
-                star['hue'] = random.random()
+            star["x"] -= CONFIG["star_speed"] * star["z"]
+            if star["x"] < 0:
+                star["x"] = self.width
+                star["y"] = random.randint(0, max(1, self.height))
+                star["hue"] = random.random()
 
     def resize(self, w, h):
         self.width, self.height = max(1, w), max(1, h)
 
     def get_stars(self):
-        return [(s['x'], s['y'], hsv_to_hex((s['hue'] + self.hue_offset) % 1.0, 0.4, s['brightness']))
-                for s in self.stars]
+        return [
+            (s["x"], s["y"], hsv_to_hex((s["hue"] + self.hue_offset) % 1.0, 0.4, s["brightness"])) for s in self.stars
+        ]
 
 
 # =============================================================================
@@ -1671,58 +1861,70 @@ class Screensaver:
     """Multi-visualization screensaver - 18 Mandalas & 3D shapes"""
 
     VISUALIZATIONS = [
-        Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
-        RotatingDodecahedron, SriYantra, Merkaba, Cell24,
-        KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
-        Hyperdodecahedron, CosmicWeb, UzumakiSpiral3D,
-        FourierEpicycles, GeodesicSphere, BouncingParticles, TunnelFlight
+        Tesseract,
+        SacredMandala,
+        SpiralingIcosahedron,
+        LotusMandala,
+        RotatingDodecahedron,
+        SriYantra,
+        Merkaba,
+        Cell24,
+        KaleidoscopeMandala,
+        StellatedDodecahedron,
+        HarmonicRose,
+        Hyperdodecahedron,
+        CosmicWeb,
+        UzumakiSpiral3D,
+        FourierEpicycles,
+        GeodesicSphere,
+        BouncingParticles,
+        TunnelFlight,
     ]
 
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Mandala & 3D Screensaver")
-        self.root.configure(bg=CONFIG['bg_color'])
+        self.root.configure(bg=CONFIG["bg_color"])
 
         self.width, self.height = 900, 700
-        self.root.geometry(f'{self.width}x{self.height}')
+        self.root.geometry(f"{self.width}x{self.height}")
         self.root.minsize(400, 300)
 
         # Clock bar
-        self.clock_frame = tk.Frame(self.root, bg='#000000', height=CONFIG['clock_height'])
+        self.clock_frame = tk.Frame(self.root, bg="#000000", height=CONFIG["clock_height"])
         self.clock_frame.pack(fill=tk.X, side=tk.TOP)
         self.clock_frame.pack_propagate(False)
 
-        self.clock_label = tk.Label(self.clock_frame, text="", font=('Arial', CONFIG['clock_font_size'], 'bold'),
-                                    fg='#ffffff', bg='#000000')
+        self.clock_label = tk.Label(
+            self.clock_frame, text="", font=("Arial", CONFIG["clock_font_size"], "bold"), fg="#ffffff", bg="#000000"
+        )
         self.clock_label.pack(expand=True)
 
-        self.name_label = tk.Label(self.clock_frame, text="", font=('Arial', 14),
-                                   fg='#666666', bg='#000000')
-        self.name_label.place(relx=0.98, rely=0.5, anchor='e')
+        self.name_label = tk.Label(self.clock_frame, text="", font=("Arial", 14), fg="#666666", bg="#000000")
+        self.name_label.place(relx=0.98, rely=0.5, anchor="e")
 
         # Canvas
-        self.canvas = tk.Canvas(self.root, bg=CONFIG['bg_color'], highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, bg=CONFIG["bg_color"], highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # Initialize
         self.stars = StarField(self.width, self.height)
         self.current_viz = None
         self.line_items = []
-        self.star_items = [self.canvas.create_oval(0, 0, 1, 1, fill='', outline='')
-                          for _ in range(CONFIG['num_stars'])]
+        self.star_items = [self.canvas.create_oval(0, 0, 1, 1, fill="", outline="") for _ in range(CONFIG["num_stars"])]
 
         self._switch_visualization()
 
         # Bindings
-        self.root.bind('<Escape>', lambda e: self.quit())
-        self.root.bind('<space>', lambda e: self._switch_visualization())
-        self.root.bind('<Configure>', self._on_resize)
+        self.root.bind("<Escape>", lambda e: self.quit())
+        self.root.bind("<space>", lambda e: self._switch_visualization())
+        self.root.bind("<Configure>", self._on_resize)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
-        self.frame_time = 1000 // CONFIG['fps']
+        self.frame_time = 1000 // CONFIG["fps"]
         self.running = True
 
-        self.root.after(CONFIG['switch_interval'], self._auto_switch)
+        self.root.after(CONFIG["switch_interval"], self._auto_switch)
 
     def _switch_visualization(self):
         try:
@@ -1732,8 +1934,9 @@ class Screensaver:
 
             for item in self.line_items:
                 self.canvas.delete(item)
-            self.line_items = [self.canvas.create_line(0, 0, 0, 0, fill='', width=1)
-                              for _ in range(self.current_viz.num_lines)]
+            self.line_items = [
+                self.canvas.create_line(0, 0, 0, 0, fill="", width=1) for _ in range(self.current_viz.num_lines)
+            ]
 
             self.name_label.config(text=self.current_viz.name)
             self.root.title(f"Screensaver - {self.current_viz.name}")
@@ -1743,7 +1946,7 @@ class Screensaver:
     def _auto_switch(self):
         if self.running:
             self._switch_visualization()
-            self.root.after(CONFIG['switch_interval'], self._auto_switch)
+            self.root.after(CONFIG["switch_interval"], self._auto_switch)
 
     def _on_resize(self, event):
         if event.widget == self.canvas:
@@ -1759,12 +1962,12 @@ class Screensaver:
 
     def draw(self):
         try:
-            self.clock_label.config(text=datetime.now().strftime('%H:%M:%S'))
+            self.clock_label.config(text=datetime.now().strftime("%H:%M:%S"))
 
-            s = CONFIG['star_size']
+            s = CONFIG["star_size"]
             for i, (x, y, color) in enumerate(self.stars.get_stars()):
                 if i < len(self.star_items):
-                    self.canvas.coords(self.star_items[i], x-s, y-s, x+s, y+s)
+                    self.canvas.coords(self.star_items[i], x - s, y - s, x + s, y + s)
                     self.canvas.itemconfig(self.star_items[i], fill=color)
 
             edges = self.current_viz.get_edges(self.width, self.height) if self.current_viz else []

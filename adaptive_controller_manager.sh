@@ -225,13 +225,15 @@ system_load_acceptable() {
 
 # Function to start the controller for optimized burst mode
 start_controller() {
+    local activation_already_checked="${1:-false}"
+
     if is_controller_running; then
         log_message "Controller already running"
         return 0
     fi
     
     # Check prerequisites
-    if ! should_be_active; then
+    if [[ "$activation_already_checked" != "true" ]] && ! should_be_active; then
         log_message "Should not be active at this time ($(date '+%a %H:%M'))"
         return 1
     fi
@@ -395,7 +397,9 @@ case "${1:-check}" in
                 fi
             else
                 log_message "Controller should be running but isn't, starting..."
-                start_controller
+                # should_be_active already completed the time/session/flash checks.
+                # Reusing that result avoids a second 40-second camera sample.
+                start_controller true
             fi
         else
             # Should not be active

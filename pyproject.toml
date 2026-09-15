@@ -1,0 +1,20 @@
+[project]
+name = "auto-brightness-sound-levels"
+version = "0.1.0"
+description = "Adaptive brightness and volume controller"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "numba",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
