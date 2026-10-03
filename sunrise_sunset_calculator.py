@@ -30,7 +30,7 @@ class SunCalculator:
         self.timezone_offset = timezone_offset
         
         # Try to auto-detect location if not provided
-        if not all([latitude, longitude, timezone_offset]):
+        if any(value is None for value in (latitude, longitude, timezone_offset)):
             self._auto_detect_location()
     
     def _auto_detect_location(self):
@@ -292,22 +292,21 @@ class SunCalculator:
         
         windows = self.get_activation_windows()
         
-        # Check sunrise window
-        if windows['sunrise_start'] <= current_time <= windows['sunrise_end']:
+        def contains(start, end):
+            if start <= end:
+                return start <= current_time <= end
+            return current_time >= start or current_time <= end
+
+        # Check sunrise window first, including day overflow
+        if contains(windows['sunrise_start'], windows['sunrise_end']):
             return True, 'sunrise'
         
         # Check sunset window (handle day overflow)
         sunset_start = windows['sunset_start']
         sunset_end = windows['sunset_end']
         
-        if sunset_start <= sunset_end:
-            # Normal case: both times on same day
-            if sunset_start <= current_time <= sunset_end:
-                return True, 'sunset'
-        else:
-            # Day overflow case: sunset window crosses midnight
-            if current_time >= sunset_start or current_time <= sunset_end:
-                return True, 'sunset'
+        if contains(sunset_start, sunset_end):
+            return True, 'sunset'
         
         return False, None
 
