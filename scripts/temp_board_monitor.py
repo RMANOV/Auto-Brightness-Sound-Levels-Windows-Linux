@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import glob
 import grp
+import math
 import os
 import pwd
 import re
@@ -27,6 +28,7 @@ CH340_VENDOR = "1a86"
 CH340_PRODUCT = "7523"
 DEFAULT_BAUD = 115200
 TEMP_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+CPU_THERMAL_LABELS = ("x86_pkg_temp", "cpu_thermal", "cpu-thermal")
 
 
 @dataclass
@@ -70,12 +72,10 @@ def read_text(path: Path) -> str | None:
 
 def read_host_temperatures() -> list[Temperature]:
     temps: list[Temperature] = []
-    seen_paths: set[Path] = set()
 
     for hwmon in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
         chip_name = read_text(hwmon / "name") or hwmon.name
         for input_path in sorted(hwmon.glob("temp*_input")):
-            seen_paths.add(input_path.resolve())
             raw = read_text(input_path)
             if raw is None:
                 continue
@@ -87,12 +87,13 @@ def read_host_temperatures() -> list[Temperature]:
             label = read_text(hwmon / f"{prefix}_label") or prefix
             temps.append(Temperature("hwmon", f"{chip_name}:{label}", celsius))
 
-    if temps:
-        return temps
-
+    # With hwmon readings present, supplement only identified CPU thermal zones.
+    # Distinct ABI source/label identities remain distinct, even for one file.
+    have_hwmon = bool(temps)
     for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
         input_path = zone / "temp"
-        if input_path.resolve() in seen_paths:
+        label = read_text(zone / "type") or zone.name
+        if have_hwmon and label not in CPU_THERMAL_LABELS:
             continue
         raw = read_text(input_path)
         if raw is None:
@@ -101,8 +102,7 @@ def read_host_temperatures() -> list[Temperature]:
             value = float(raw)
         except ValueError:
             continue
-        celsius = value / 1000.0 if abs(value) > 200 else value
-        label = read_text(zone / "type") or zone.name
+        celsius = value / 1000.0  # Linux thermal ABI is millidegrees Celsius.
         temps.append(Temperature("thermal", label, celsius))
 
     return temps
@@ -312,28 +312,27 @@ def parse_board_temperature(line: str | None) -> float | None:
 
 
 def select_display_temperature(temps: list[Temperature]) -> Temperature | None:
-    if not temps:
-        return None
-
+    cpu_hwmon = [temp for temp in temps if temp.source == "hwmon" and math.isfinite(temp.celsius)]
+    packages = [temp for temp in cpu_hwmon if re.fullmatch(r"coretemp:Package id \d+", temp.label)]
+    if packages:
+        return max(packages, key=lambda temp: temp.celsius)
     preferred_labels = (
-        "coretemp:Package id 0",
-        "coretemp:Tctl",
-        "coretemp:Tdie",
         "k10temp:Tctl",
         "k10temp:Tdie",
         "zenpower:Tctl",
         "zenpower:Tdie",
-        "dell_smm:temp1",
+        "dell_smm:CPU",
     )
     for label in preferred_labels:
-        for temp in temps:
+        for temp in cpu_hwmon:
             if temp.label == label:
                 return temp
 
-    core_temps = [temp for temp in temps if temp.label.startswith("coretemp:")]
+    core_temps = [temp for temp in cpu_hwmon if re.fullmatch(r"coretemp:(?:Core \d+|temp\d+)", temp.label)]
     if core_temps:
         return max(core_temps, key=lambda temp: temp.celsius)
-    return max(temps, key=lambda temp: temp.celsius)
+    cpu_thermal = [temp for temp in temps if temp.source == "thermal" and temp.label in CPU_THERMAL_LABELS and math.isfinite(temp.celsius)]
+    return max(cpu_thermal, key=lambda temp: temp.celsius) if cpu_thermal else None
 
 
 def read_proc_stat_cpu_totals() -> tuple[int, int] | None:
@@ -347,8 +346,11 @@ def read_proc_stat_cpu_totals() -> tuple[int, int] | None:
         values = [int(value) for value in first[1:]]
     except ValueError:
         return None
+    if len(values) < 4 or any(value < 0 for value in values):
+        return None
     idle = values[3] + (values[4] if len(values) > 4 else 0)
-    total = sum(values)
+    # guest/guest_nice are already included in user/nice, not additional time.
+    total = sum(values[:8])
     return idle, total
 
 
