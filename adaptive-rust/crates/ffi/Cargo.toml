@@ -1,0 +1,13 @@
+[package]
+name = "adaptive-rust"
+version.workspace = true
+edition = "2021"
+
+[lib]
+name = "adaptive_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+adaptive-core.workspace = true
+pyo3.workspace = true
+numpy.workspace = true

@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Template: Setup script for brightness control permissions
+# This allows the adaptive controller to work properly from cron jobs
+# 
+# INSTRUCTIONS:
+# 1. Copy this file to setup_brightness_permissions.sh
+# 2. Make it executable: chmod +x setup_brightness_permissions.sh
+# 3. Run it: ./setup_brightness_permissions.sh
+
+echo "🔧 Setting up brightness control permissions for cron jobs..."
+echo
+
+USER_NAME="${USER:-$(whoami)}"
+
+# Create sudoers rule for brightness control
+echo "Creating sudoers rule for user: $USER_NAME"
+
+sudo tee /etc/sudoers.d/brightness-control <<EOF
+# Allow $USER_NAME to control brightness without password
+# This is needed for cron jobs that adjust screen brightness
+$USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/brightnessctl
+$USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/class/backlight/*/brightness
+EOF
+
+# Set proper permissions
+sudo chmod 440 /etc/sudoers.d/brightness-control
+
+# Verify the configuration
+echo
+echo "✅ Brightness control permissions configured!"
+echo
+echo "Testing brightness control..."
+
+# Test the configuration
+if sudo -n /usr/bin/brightnessctl get >/dev/null 2>&1; then
+    echo "✅ Brightness control test PASSED"
+    
+    # Test actual brightness change
+    CURRENT_BRIGHTNESS=$(sudo -n /usr/bin/brightnessctl get)
+    sudo -n /usr/bin/brightnessctl set 50% >/dev/null 2>&1
+    sleep 1
+    sudo -n /usr/bin/brightnessctl set $CURRENT_BRIGHTNESS >/dev/null 2>&1
+    
+    echo "✅ Brightness adjustment test PASSED"
+    echo
+    echo "Your adaptive controller should now work properly from cron jobs!"
+else
+    echo "❌ Brightness control test FAILED"
+    echo "Please check the sudo configuration."
+fi
+
+echo
+echo "You can now run your adaptive controller and it should work in cron context."

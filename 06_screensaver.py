@@ -1,0 +1,2793 @@
+#!/usr/bin/env python3
+"""Hilbert Curve + Walking Creatures Screensaver - Pure Tkinter"""
+import math
+import random
+import time
+import tkinter as tk
+from datetime import datetime
+
+CONFIG = {
+    'fps': 30,
+    'bg_color': '#06080c',
+    'num_stars': 40,
+    'star_speed': 0.3,
+    'star_size': 3,
+    'color_cycle_speed': 0.004,
+    'clock_height': 80,
+    'clock_font_size': 48,
+    'line_width': 3,
+    'hilbert_order': 4,         # 256 points
+    'hilbert_line_width': 2,
+    'min_follow_distance': 120, # creatures never closer than this to cursor
+    'follow_ease': 0.03,        # lerp factor for cursor following
+    'wander_ease': 0.01,        # lerp factor for random wandering
+    'cursor_timeout': 3.0,      # seconds before cursor considered absent
+    'rotation_speed': 0.008,
+    'max_lines': 2500,          # pre-allocated line pool
+    'switch_interval': 7 * 60 * 1000,  # 7 minutes in ms
+}
+
+
+# =============================================================================
+# UTILITY
+# =============================================================================
+
+def hsv_to_hex(h, s, v):
+    try:
+        h = h % 1.0
+        i = int(h * 6)
+        f = (h * 6) - i
+        p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+        rgb = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i]
+        return f'#{int(rgb[0]*255):02x}{int(rgb[1]*255):02x}{int(rgb[2]*255):02x}'
+    except Exception:
+        return '#8080ff'
+
+
+# =============================================================================
+# STAR FIELD
+# =============================================================================
+
+class StarField:
+    def __init__(self, width, height):
+        self.width, self.height = max(1, width), max(1, height)
+        self.hue_offset = 0.0
+        self.stars = [{'x': random.randint(0, self.width), 'y': random.randint(0, self.height),
+                       'z': random.random() * 2 + 0.5, 'brightness': random.uniform(0.3, 0.8),
+                       'hue': random.random()} for _ in range(CONFIG['num_stars'])]
+
+    def update(self):
+        self.hue_offset += CONFIG['color_cycle_speed'] * 0.3
+        for star in self.stars:
+            star['x'] -= CONFIG['star_speed'] * star['z']
+            if star['x'] < 0:
+                star['x'] = self.width
+                star['y'] = random.randint(0, max(1, self.height))
+                star['hue'] = random.random()
+
+    def resize(self, w, h):
+        self.width, self.height = max(1, w), max(1, h)
+
+    def get_stars(self):
+        return [(s['x'], s['y'], hsv_to_hex((s['hue'] + self.hue_offset) % 1.0, 0.4, s['brightness']))
+                for s in self.stars]
+
+
+# =============================================================================
+# 18 VISUALIZATIONS FROM VERSION 05
+# =============================================================================
+
+class Tesseract:
+    """4D Hypercube projection"""
+    name = "4D Tesseract"
+    num_lines = 32
+
+    def __init__(self):
+        self.angle_xy = self.angle_zw = self.angle_xz = self.angle_yz = 0.0
+        self.hue_offset = 0.0
+        self.vertices_4d = [[x, y, z, w] for x in [-1, 1] for y in [-1, 1] for z in [-1, 1] for w in [-1, 1]]
+        self.edges = [(i, j) for i in range(16) for j in range(i + 1, 16)
+                      if sum(1 for k in range(4) if self.vertices_4d[i][k] != self.vertices_4d[j][k]) == 1]
+
+    def update(self):
+        self.angle_xy += CONFIG['rotation_speed'] * 1.5
+        self.angle_zw += CONFIG['rotation_speed'] * 1.05
+        self.angle_xz += CONFIG['rotation_speed']
+        self.angle_yz += CONFIG['rotation_speed'] * 0.5
+        self.hue_offset += CONFIG['color_cycle_speed']
+
+    def get_edges(self, width, height):
+        try:
+            projected = []
+            for v in self.vertices_4d:
+                x, y, z, w = v
+                c, s = math.cos(self.angle_xy), math.sin(self.angle_xy)
+                x, w = x * c - w * s, x * s + w * c
+                c, s = math.cos(self.angle_zw), math.sin(self.angle_zw)
+                z, w = z * c - w * s, z * s + w * c
+                c, s = math.cos(self.angle_xz), math.sin(self.angle_xz)
+                x, z = x * c - z * s, x * s + z * c
+                c, s = math.cos(self.angle_yz), math.sin(self.angle_yz)
+                y, z = y * c - z * s, y * s + z * c
+                d4, d3 = 3.0, 4.0
+                s4 = d4 / (d4 - w)
+                x3, y3, z3 = x * s4, y * s4, z * s4
+                s3 = d3 / (d3 - z3)
+                size = min(width, height) * 0.14
+                projected.append((width/2 + x3*s3*size, height/2 - y3*s3*size, (w+1)/2, s4*s3))
+            edges = []
+            for idx, (i, j) in enumerate(self.edges):
+                x1, y1, d1, s1 = projected[i]
+                x2, y2, d2, s2 = projected[j]
+                hue = (idx / len(self.edges) + self.hue_offset) % 1.0
+                color = hsv_to_hex(hue, 0.7 + (d1+d2)/4*0.3, 0.6 + (d1+d2)/4*0.4)
+                lw = max(1, int(CONFIG['line_width'] * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, color, lw))
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 2: Sacred Geometry Mandala
+# =============================================================================
+class SacredMandala:
+    """Flower of Life inspired mandala with rotating petals"""
+    name = "Sacred Mandala"
+    num_lines = 250
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_petals = random.choice([6, 8, 12])
+        self.n_layers = 5
+        self.angles = [random.random() * math.pi for _ in range(self.n_layers)]
+
+    def update(self):
+        self.t += 0.008
+        for i in range(self.n_layers):
+            self.angles[i] += 0.006 * (1 if i % 2 == 0 else -1) * (1 + i * 0.3)
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.4
+            edges = []
+            pulse = 1 + 0.05 * math.sin(self.t * 0.5)
+
+            for layer in range(self.n_layers):
+                r = (layer + 1) / self.n_layers * max_r * pulse
+                hue = (layer / self.n_layers + self.hue_offset) % 1.0
+                pts = []
+                for i in range(self.n_petals):
+                    a = self.angles[layer] + i * 2 * math.pi / self.n_petals
+                    pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+
+                # Petal outline
+                for i in range(self.n_petals):
+                    edges.append((pts[i][0], pts[i][1], pts[(i+1) % self.n_petals][0], pts[(i+1) % self.n_petals][1],
+                                 hsv_to_hex((hue + i * 0.05) % 1, 0.8, 0.7), 2))
+
+                # Flower connections - every other petal
+                for i in range(self.n_petals):
+                    j = (i + 2) % self.n_petals
+                    edges.append((pts[i][0], pts[i][1], pts[j][0], pts[j][1],
+                                 hsv_to_hex((hue + 0.3) % 1, 0.6, 0.5), 1))
+
+            # Inter-layer spokes
+            for layer in range(self.n_layers - 1):
+                r1 = (layer + 1) / self.n_layers * max_r * pulse
+                r2 = (layer + 2) / self.n_layers * max_r * pulse
+                hue = ((layer + 0.5) / self.n_layers + self.hue_offset) % 1.0
+                for i in range(self.n_petals):
+                    a1 = self.angles[layer] + i * 2 * math.pi / self.n_petals
+                    a2 = self.angles[layer + 1] + i * 2 * math.pi / self.n_petals
+                    x1, y1 = cx + r1 * math.cos(a1), cy + r1 * math.sin(a1)
+                    x2, y2 = cx + r2 * math.cos(a2), cy + r2 * math.sin(a2)
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, 0.55), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 3: Spiraling Icosahedron
+# =============================================================================
+class SpiralingIcosahedron:
+    """3D Icosahedron with spiraling vertex trails"""
+    name = "Spiraling Icosahedron"
+    num_lines = 350
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        phi = (1 + math.sqrt(5)) / 2
+        self.base_verts = [
+            (0, 1, phi), (0, -1, phi), (0, 1, -phi), (0, -1, -phi),
+            (1, phi, 0), (-1, phi, 0), (1, -phi, 0), (-1, -phi, 0),
+            (phi, 0, 1), (-phi, 0, 1), (phi, 0, -1), (-phi, 0, -1)
+        ]
+        self.edges_idx = [
+            (0,1), (0,4), (0,5), (0,8), (0,9), (1,6), (1,7), (1,8), (1,9),
+            (2,3), (2,4), (2,5), (2,10), (2,11), (3,6), (3,7), (3,10), (3,11),
+            (4,5), (4,8), (4,10), (5,9), (5,11), (6,7), (6,8), (6,10), (7,9), (7,11), (8,10), (9,11)
+        ]
+        self.trails = [[] for _ in range(12)]
+
+    def update(self):
+        self.t += 0.02
+        self.angle_x += 0.007
+        self.angle_y += 0.009
+        self.angle_z += 0.005
+        self.hue_offset += 0.004
+
+    def _rotate(self, v):
+        x, y, z = v
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.18
+            edges = []
+
+            # Rotate and project vertices
+            projected = []
+            for i, v in enumerate(self.base_verts):
+                x, y, z = self._rotate(v)
+                d = 5.0
+                s = d / (d - z)
+                px, py = cx + x * s * size, cy - y * s * size
+                projected.append((px, py, z, s))
+                # Add to trail
+                self.trails[i].append((px, py))
+                if len(self.trails[i]) > 30:
+                    self.trails[i] = self.trails[i][-30:]
+
+            # Draw edges
+            for idx, (i, j) in enumerate(self.edges_idx):
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                x1, y1, z1, s1 = projected[i]
+                x2, y2, z2, s2 = projected[j]
+                lw = max(1, int(2.5 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.7), lw))
+
+            # Draw trails
+            for vi, trail in enumerate(self.trails):
+                for ti in range(1, len(trail)):
+                    t = ti / len(trail)
+                    hue = (vi / 12 + self.hue_offset + 0.5) % 1.0
+                    edges.append((trail[ti-1][0], trail[ti-1][1], trail[ti][0], trail[ti][1],
+                                 hsv_to_hex(hue, 0.6, t * 0.5), 1))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 4: Lotus Mandala
+# =============================================================================
+class LotusMandala:
+    """Multi-layered lotus flower mandala"""
+    name = "Lotus Mandala"
+    num_lines = 300
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_petals = random.choice([8, 12, 16])
+        self.petal_layers = 4
+        self.bloom = 0.5
+
+    def update(self):
+        self.t += 0.006
+        self.bloom = 0.5 + 0.3 * math.sin(self.t * 0.3)
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.38
+            edges = []
+
+            for layer in range(self.petal_layers):
+                layer_r = (layer + 1) / self.petal_layers * max_r
+                petal_w = layer_r * 0.4 * self.bloom
+                rot = self.t * (0.3 if layer % 2 == 0 else -0.3) + layer * math.pi / self.n_petals
+                hue = (layer / self.petal_layers + self.hue_offset) % 1.0
+
+                for p in range(self.n_petals):
+                    a = rot + p * 2 * math.pi / self.n_petals
+                    # Petal tip
+                    tip_x = cx + layer_r * math.cos(a)
+                    tip_y = cy + layer_r * math.sin(a)
+                    # Petal sides
+                    side_r = layer_r * 0.5
+                    left_a = a - petal_w / layer_r
+                    right_a = a + petal_w / layer_r
+                    left_x = cx + side_r * math.cos(left_a)
+                    left_y = cy + side_r * math.sin(left_a)
+                    right_x = cx + side_r * math.cos(right_a)
+                    right_y = cy + side_r * math.sin(right_a)
+                    # Draw petal
+                    ph = (hue + p * 0.03) % 1.0
+                    edges.append((left_x, left_y, tip_x, tip_y, hsv_to_hex(ph, 0.8, 0.7), 2))
+                    edges.append((right_x, right_y, tip_x, tip_y, hsv_to_hex(ph, 0.8, 0.7), 2))
+                    edges.append((left_x, left_y, right_x, right_y, hsv_to_hex((ph + 0.1) % 1, 0.6, 0.5), 1))
+
+            # Center circle
+            n_center = 12
+            center_r = max_r * 0.15
+            for i in range(n_center):
+                a1 = i * 2 * math.pi / n_center
+                a2 = (i + 1) * 2 * math.pi / n_center
+                x1 = cx + center_r * math.cos(a1)
+                y1 = cy + center_r * math.sin(a1)
+                x2 = cx + center_r * math.cos(a2)
+                y2 = cy + center_r * math.sin(a2)
+                edges.append((x1, y1, x2, y2, hsv_to_hex((self.hue_offset + 0.5) % 1, 0.9, 0.8), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 5: Rotating Dodecahedron
+# =============================================================================
+class RotatingDodecahedron:
+    """3D Dodecahedron with smooth rotation"""
+    name = "Dodecahedron"
+    num_lines = 30
+
+    def __init__(self):
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        self.hue_offset = 0.0
+        phi = (1 + math.sqrt(5)) / 2
+        ip = 1 / phi
+        self.verts = [
+            (1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
+            (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1),
+            (0, ip, phi), (0, ip, -phi), (0, -ip, phi), (0, -ip, -phi),
+            (ip, phi, 0), (ip, -phi, 0), (-ip, phi, 0), (-ip, -phi, 0),
+            (phi, 0, ip), (phi, 0, -ip), (-phi, 0, ip), (-phi, 0, -ip)
+        ]
+        self.edges_idx = [
+            (0,8), (0,12), (0,16), (1,9), (1,12), (1,17), (2,10), (2,13), (2,16),
+            (3,11), (3,13), (3,17), (4,8), (4,14), (4,18), (5,9), (5,14), (5,19),
+            (6,10), (6,15), (6,18), (7,11), (7,15), (7,19), (8,10), (9,11),
+            (12,14), (13,15), (16,17), (18,19)
+        ]
+
+    def update(self):
+        self.angle_x += 0.006
+        self.angle_y += 0.008
+        self.angle_z += 0.004
+        self.hue_offset += 0.004
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.15
+            edges = []
+
+            projected = []
+            for v in self.verts:
+                x, y, z = v
+                cy_, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+                x, z = x * cy_ - z * sy, x * sy + z * cy_
+                cx_, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+                y, z = y * cx_ - z * sx, y * sx + z * cx_
+                cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+                x, y = x * cz - y * sz, x * sz + y * cz
+                d = 5.0
+                s = d / (d - z)
+                projected.append((cx + x * s * size, cy - y * s * size, z, s))
+
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, z1, s1 = projected[i]
+                x2, y2, z2, s2 = projected[j]
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                depth = (z1 + z2 + 4) / 8
+                lw = max(1, int(3 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, 0.5 + depth * 0.4), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 6: Sri Yantra Mandala
+# =============================================================================
+class SriYantra:
+    """Sri Yantra sacred geometry with rotating triangles"""
+    name = "Sri Yantra"
+    num_lines = 200
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.outer_rot = 0.0
+        self.inner_rot = 0.0
+
+    def update(self):
+        self.t += 0.008
+        self.outer_rot += 0.003
+        self.inner_rot -= 0.005
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.38
+            edges = []
+
+            # Outer square (Bhupura)
+            sq_r = max_r * 0.95
+            for i in range(4):
+                a1 = self.outer_rot + i * math.pi / 2 + math.pi / 4
+                a2 = self.outer_rot + (i + 1) * math.pi / 2 + math.pi / 4
+                x1, y1 = cx + sq_r * math.cos(a1), cy + sq_r * math.sin(a1)
+                x2, y2 = cx + sq_r * math.cos(a2), cy + sq_r * math.sin(a2)
+                edges.append((x1, y1, x2, y2, hsv_to_hex(self.hue_offset, 0.6, 0.5), 2))
+
+            # Concentric circles
+            for i in range(3):
+                r = max_r * (0.85 - i * 0.1)
+                n_seg = 36
+                for j in range(n_seg):
+                    a1 = j * 2 * math.pi / n_seg
+                    a2 = (j + 1) * 2 * math.pi / n_seg
+                    x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
+                    x2, y2 = cx + r * math.cos(a2), cy + r * math.sin(a2)
+                    hue = (i * 0.15 + self.hue_offset) % 1.0
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.5, 0.45), 1))
+
+            # Interlocking triangles (9 triangles - 4 up, 5 down)
+            tri_scales = [0.7, 0.55, 0.4, 0.25]
+            for ti, scale in enumerate(tri_scales):
+                r = max_r * scale
+                # Upward triangle
+                up_rot = self.inner_rot + ti * 0.1
+                hue = (ti * 0.12 + self.hue_offset + 0.3) % 1.0
+                pts_up = []
+                for i in range(3):
+                    a = up_rot + i * 2 * math.pi / 3 - math.pi / 2
+                    pts_up.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+                for i in range(3):
+                    edges.append((pts_up[i][0], pts_up[i][1], pts_up[(i+1)%3][0], pts_up[(i+1)%3][1],
+                                 hsv_to_hex(hue, 0.8, 0.7), 2))
+
+                # Downward triangle
+                down_rot = -self.inner_rot - ti * 0.1
+                hue2 = (ti * 0.12 + self.hue_offset + 0.6) % 1.0
+                pts_down = []
+                for i in range(3):
+                    a = down_rot + i * 2 * math.pi / 3 + math.pi / 2
+                    pts_down.append((cx + r * 0.9 * math.cos(a), cy + r * 0.9 * math.sin(a)))
+                for i in range(3):
+                    edges.append((pts_down[i][0], pts_down[i][1], pts_down[(i+1)%3][0], pts_down[(i+1)%3][1],
+                                 hsv_to_hex(hue2, 0.8, 0.7), 2))
+
+            # Central bindu (point)
+            bindu_r = max_r * 0.05
+            for i in range(8):
+                a1 = i * math.pi / 4
+                a2 = (i + 1) * math.pi / 4
+                x1, y1 = cx + bindu_r * math.cos(a1), cy + bindu_r * math.sin(a1)
+                x2, y2 = cx + bindu_r * math.cos(a2), cy + bindu_r * math.sin(a2)
+                edges.append((x1, y1, x2, y2, hsv_to_hex((self.hue_offset + 0.5) % 1, 0.9, 0.9), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 7: Stellated Octahedron (Merkaba)
+# =============================================================================
+class Merkaba:
+    """3D Merkaba / Star Tetrahedron"""
+    name = "Merkaba"
+    num_lines = 24
+
+    def __init__(self):
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        self.hue_offset = 0.0
+        s = 1.0
+        # Two interlocking tetrahedra
+        self.tetra1 = [(s, s, s), (s, -s, -s), (-s, s, -s), (-s, -s, s)]
+        self.tetra2 = [(-s, -s, -s), (-s, s, s), (s, -s, s), (s, s, -s)]
+        self.edges1 = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
+        self.edges2 = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
+
+    def update(self):
+        self.angle_x += 0.008
+        self.angle_y += 0.01
+        self.angle_z += 0.006
+        self.hue_offset += 0.004
+
+    def _rotate(self, v):
+        x, y, z = v
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.2
+            edges = []
+
+            for tetra, edges_idx, hue_base in [(self.tetra1, self.edges1, 0), (self.tetra2, self.edges2, 0.5)]:
+                projected = []
+                for v in tetra:
+                    x, y, z = self._rotate(v)
+                    d = 4.0
+                    s = d / (d - z)
+                    projected.append((cx + x * s * size, cy - y * s * size, z, s))
+
+                for idx, (i, j) in enumerate(edges_idx):
+                    x1, y1, z1, s1 = projected[i]
+                    x2, y2, z2, s2 = projected[j]
+                    hue = (hue_base + idx * 0.08 + self.hue_offset) % 1.0
+                    lw = max(2, int(3.5 * (s1 + s2) / 2))
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.75), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 8: 4D 24-Cell (Icositetrachoron)
+# =============================================================================
+class Cell24:
+    """4D polytope with 24 octahedral cells - one of the most beautiful 4D shapes"""
+    name = "4D 24-Cell"
+    num_lines = 96
+
+    def __init__(self):
+        self.angle_xy = self.angle_xz = self.angle_xw = 0.0
+        self.angle_yz = self.angle_yw = self.angle_zw = 0.0
+        self.hue_offset = 0.0
+        # 24 vertices: 8 from permutations of (±1,0,0,0) + 16 from (±½,±½,±½,±½)
+        self.verts = []
+        # Type A: permutations of (±1, 0, 0, 0)
+        for i in range(4):
+            for s in [-1, 1]:
+                v = [0, 0, 0, 0]
+                v[i] = s
+                self.verts.append(tuple(v))
+        # Type B: (±½, ±½, ±½, ±½)
+        for s1 in [-0.5, 0.5]:
+            for s2 in [-0.5, 0.5]:
+                for s3 in [-0.5, 0.5]:
+                    for s4 in [-0.5, 0.5]:
+                        self.verts.append((s1, s2, s3, s4))
+        # Edges: connect vertices at distance 1
+        self.edges_idx = []
+        for i in range(24):
+            for j in range(i + 1, 24):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                if abs(d - 1.0) < 0.01:
+                    self.edges_idx.append((i, j))
+
+    def update(self):
+        self.angle_xy += 0.007
+        self.angle_xz += 0.005
+        self.angle_xw += 0.009
+        self.angle_yz += 0.004
+        self.angle_yw += 0.006
+        self.angle_zw += 0.008
+        self.hue_offset += 0.004
+
+    def _rotate4d(self, v):
+        x, y, z, w = v
+        # XY rotation
+        c, s = math.cos(self.angle_xy), math.sin(self.angle_xy)
+        x, y = x * c - y * s, x * s + y * c
+        # XZ rotation
+        c, s = math.cos(self.angle_xz), math.sin(self.angle_xz)
+        x, z = x * c - z * s, x * s + z * c
+        # XW rotation
+        c, s = math.cos(self.angle_xw), math.sin(self.angle_xw)
+        x, w = x * c - w * s, x * s + w * c
+        # YZ rotation
+        c, s = math.cos(self.angle_yz), math.sin(self.angle_yz)
+        y, z = y * c - z * s, y * s + z * c
+        # YW rotation
+        c, s = math.cos(self.angle_yw), math.sin(self.angle_yw)
+        y, w = y * c - w * s, y * s + w * c
+        # ZW rotation
+        c, s = math.cos(self.angle_zw), math.sin(self.angle_zw)
+        z, w = z * c - w * s, z * s + w * c
+        return x, y, z, w
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.18
+            edges = []
+
+            projected = []
+            for v in self.verts:
+                x, y, z, w = self._rotate4d(v)
+                # 4D to 3D perspective
+                d4 = 2.5
+                s4 = d4 / (d4 - w)
+                x3, y3, z3 = x * s4, y * s4, z * s4
+                # 3D to 2D perspective
+                d3 = 4.0
+                s3 = d3 / (d3 - z3)
+                px = cx + x3 * s3 * size
+                py = cy - y3 * s3 * size
+                projected.append((px, py, w, s4 * s3))
+
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, w1, s1 = projected[i]
+                x2, y2, w2, s2 = projected[j]
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                depth = (w1 + w2 + 2) / 4
+                lw = max(1, int(3 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, 0.4 + depth * 0.5), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 9: Kaleidoscope Mandala
+# =============================================================================
+class KaleidoscopeMandala:
+    """Dynamic kaleidoscope with mirrored segments"""
+    name = "Kaleidoscope"
+    num_lines = 300
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_mirrors = random.choice([6, 8, 10, 12])
+        self.shapes = []
+        for _ in range(15):
+            self.shapes.append({
+                'r': random.random() * 0.7 + 0.1,
+                'a': random.random() * math.pi * 2,
+                'dr': (random.random() - 0.5) * 0.003,
+                'da': (random.random() - 0.5) * 0.02,
+                'size': random.random() * 0.08 + 0.03,
+                'sides': random.choice([3, 4, 5, 6])
+            })
+
+    def update(self):
+        self.t += 0.008
+        self.hue_offset += 0.004
+        for s in self.shapes:
+            s['r'] += s['dr']
+            s['a'] += s['da']
+            if s['r'] < 0.1 or s['r'] > 0.8:
+                s['dr'] *= -1
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            max_r = min(width, height) * 0.42
+            edges = []
+
+            for si, shape in enumerate(self.shapes):
+                hue_base = (si / len(self.shapes) + self.hue_offset) % 1.0
+                # Draw shape in each mirror segment
+                for m in range(self.n_mirrors):
+                    mirror_a = m * 2 * math.pi / self.n_mirrors
+                    # Shape position
+                    sr = shape['r'] * max_r
+                    sa = shape['a'] + mirror_a
+                    scx = cx + sr * math.cos(sa)
+                    scy = cy + sr * math.sin(sa)
+                    # Draw polygon
+                    sz = shape['size'] * max_r
+                    pts = []
+                    for i in range(shape['sides']):
+                        pa = self.t + i * 2 * math.pi / shape['sides'] + mirror_a
+                        pts.append((scx + sz * math.cos(pa), scy + sz * math.sin(pa)))
+                    for i in range(shape['sides']):
+                        hue = (hue_base + m * 0.02) % 1.0
+                        edges.append((pts[i][0], pts[i][1], pts[(i+1) % shape['sides']][0], pts[(i+1) % shape['sides']][1],
+                                     hsv_to_hex(hue, 0.8, 0.7), 2))
+
+            # Mirror lines from center
+            for m in range(self.n_mirrors):
+                a = m * 2 * math.pi / self.n_mirrors + self.t * 0.1
+                x2 = cx + max_r * 0.95 * math.cos(a)
+                y2 = cy + max_r * 0.95 * math.sin(a)
+                hue = (m / self.n_mirrors + self.hue_offset) % 1.0
+                edges.append((cx, cy, x2, y2, hsv_to_hex(hue, 0.4, 0.3), 1))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 10: Stellated Dodecahedron (Great Stellated)
+# =============================================================================
+class StellatedDodecahedron:
+    """3D Great Stellated Dodecahedron"""
+    name = "Stellated Dodecahedron"
+    num_lines = 90
+
+    def __init__(self):
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        self.hue_offset = 0.0
+        phi = (1 + math.sqrt(5)) / 2
+        # Icosahedron vertices (dual of dodecahedron)
+        self.verts = []
+        for s1 in [-1, 1]:
+            for s2 in [-1, 1]:
+                self.verts.append((0, s1, s2 * phi))
+                self.verts.append((s1, s2 * phi, 0))
+                self.verts.append((s2 * phi, 0, s1))
+        # Stellate by extending vertices
+        self.stell_factor = phi * phi
+        self.spike_verts = [(v[0] * self.stell_factor, v[1] * self.stell_factor, v[2] * self.stell_factor) for v in self.verts]
+        # Edges: connect spikes to neighbors
+        self.edges_idx = []
+        for i in range(12):
+            for j in range(i + 1, 12):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(3))
+                if d < 5:  # Adjacent vertices
+                    self.edges_idx.append((i, j))
+
+    def update(self):
+        self.angle_x += 0.006
+        self.angle_y += 0.008
+        self.angle_z += 0.004
+        self.hue_offset += 0.004
+
+    def _rotate(self, v):
+        x, y, z = v
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.08
+            edges = []
+
+            # Project spike vertices
+            proj_spikes = []
+            for v in self.spike_verts:
+                x, y, z = self._rotate(v)
+                d = 6.0
+                s = d / (d - z)
+                proj_spikes.append((cx + x * s * size, cy - y * s * size, z, s))
+
+            # Project base vertices
+            proj_base = []
+            for v in self.verts:
+                x, y, z = self._rotate(v)
+                d = 6.0
+                s = d / (d - z)
+                proj_base.append((cx + x * s * size, cy - y * s * size, z, s))
+
+            # Draw spike edges
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, z1, s1 = proj_spikes[i]
+                x2, y2, z2, s2 = proj_spikes[j]
+                hue = (idx / len(self.edges_idx) + self.hue_offset) % 1.0
+                lw = max(2, int(3 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.7), lw))
+
+            # Draw connections from base to spikes
+            for i in range(12):
+                x1, y1, _, s1 = proj_base[i]
+                x2, y2, _, s2 = proj_spikes[i]
+                hue = (i / 12 + self.hue_offset + 0.5) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.7, 0.55), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 11: Harmonic Rose Mandala
+# =============================================================================
+class HarmonicRose:
+    """Rose curves (rhodonea) forming harmonic mandala"""
+    name = "Harmonic Rose"
+    num_lines = 400
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n = random.choice([3, 4, 5, 6, 7])  # Petal parameter
+        self.d = random.choice([2, 3, 5, 7])  # Density parameter
+        self.points = []
+        self.rot = 0.0
+
+    def update(self):
+        self.t += 0.03
+        self.rot += 0.003
+        self.hue_offset += 0.003
+
+        # Rose curve: r = cos(n/d * theta)
+        k = self.n / self.d
+        r = math.cos(k * self.t)
+        x = r * math.cos(self.t)
+        y = r * math.sin(self.t)
+        self.points.append((x, y))
+        if len(self.points) > 380:
+            self.points = self.points[-380:]
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.38
+            edges = []
+            cos_r, sin_r = math.cos(self.rot), math.sin(self.rot)
+
+            for i in range(1, len(self.points)):
+                x1, y1 = self.points[i - 1]
+                x2, y2 = self.points[i]
+
+                # Rotate
+                x1, y1 = x1 * cos_r - y1 * sin_r, x1 * sin_r + y1 * cos_r
+                x2, y2 = x2 * cos_r - y2 * sin_r, x2 * sin_r + y2 * cos_r
+
+                px1, py1 = cx + x1 * size, cy - y1 * size
+                px2, py2 = cx + x2 * size, cy - y2 * size
+
+                t = i / len(self.points)
+                hue = (t * 0.8 + self.hue_offset) % 1.0
+                edges.append((px1, py1, px2, py2, hsv_to_hex(hue, 0.8, 0.4 + t * 0.55), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 12: 4D 120-Cell (Hyperdodecahedron) - Partial
+# =============================================================================
+class Hyperdodecahedron:
+    """Partial 4D 120-Cell - the most complex regular 4D polytope"""
+    name = "4D Hyperdodecahedron"
+    num_lines = 150
+
+    def __init__(self):
+        self.angle_xw = self.angle_yw = self.angle_zw = 0.0
+        self.angle_xy = self.angle_xz = self.angle_yz = 0.0
+        self.hue_offset = 0.0
+        phi = (1 + math.sqrt(5)) / 2
+        ip = 1 / phi
+        p2 = phi * phi
+        # Subset of 120-cell vertices (using key symmetry points)
+        self.verts = []
+        # Permutations of (±2, ±2, 0, 0)
+        for p in [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]:
+            for s1 in [-1, 1]:
+                for s2 in [-1, 1]:
+                    v = [0, 0, 0, 0]
+                    v[p[0]], v[p[1]] = s1 * 2, s2 * 2
+                    self.verts.append(tuple(v))
+        # Permutations of (±φ², ±1, ±φ⁻², 0)
+        for i in range(4):
+            for s1 in [-1, 1]:
+                for s2 in [-1, 1]:
+                    for s3 in [-1, 1]:
+                        v = [s1 * p2, s2 * 1, s3 * ip * ip, 0]
+                        v = v[-i:] + v[:-i]  # Rotate
+                        if tuple(v) not in self.verts:
+                            self.verts.append(tuple(v))
+        self.verts = self.verts[:40]  # Limit for performance
+        # Build edges
+        self.edges_idx = []
+        for i in range(len(self.verts)):
+            for j in range(i + 1, len(self.verts)):
+                d = sum((self.verts[i][k] - self.verts[j][k])**2 for k in range(4))
+                if 3.5 < d < 4.5:  # Edge length ~2
+                    self.edges_idx.append((i, j))
+
+    def update(self):
+        self.angle_xw += 0.006
+        self.angle_yw += 0.008
+        self.angle_zw += 0.005
+        self.angle_xy += 0.004
+        self.angle_xz += 0.003
+        self.angle_yz += 0.007
+        self.hue_offset += 0.004
+
+    def _rotate4d(self, v):
+        x, y, z, w = v
+        for angle, (a, b) in [(self.angle_xy, (0,1)), (self.angle_xz, (0,2)),
+                               (self.angle_xw, (0,3)), (self.angle_yz, (1,2)),
+                               (self.angle_yw, (1,3)), (self.angle_zw, (2,3))]:
+            c, s = math.cos(angle), math.sin(angle)
+            coords = [x, y, z, w]
+            coords[a], coords[b] = coords[a]*c - coords[b]*s, coords[a]*s + coords[b]*c
+            x, y, z, w = coords
+        return x, y, z, w
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.07
+            edges = []
+            projected = []
+            for v in self.verts:
+                x, y, z, w = self._rotate4d(v)
+                d4 = 5.0
+                s4 = d4 / (d4 - w)
+                x3, y3, z3 = x * s4, y * s4, z * s4
+                d3 = 6.0
+                s3 = d3 / (d3 - z3)
+                projected.append((cx + x3*s3*size, cy - y3*s3*size, w, s4*s3))
+
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, w1, s1 = projected[i]
+                x2, y2, w2, s2 = projected[j]
+                hue = (idx / max(1, len(self.edges_idx)) + self.hue_offset) % 1.0
+                depth = (w1 + w2 + 6) / 12
+                lw = max(1, int(2.5 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.8, 0.35 + depth * 0.55), lw))
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 13: Cosmic Web (3D Neural Network)
+# =============================================================================
+class CosmicWeb:
+    """3D network of interconnected nodes forming a cosmic web structure"""
+    name = "Cosmic Web"
+    num_lines = 400
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.angle_x = self.angle_y = self.angle_z = 0.0
+        # Generate random 3D nodes
+        self.n_nodes = 35
+        self.nodes = []
+        for _ in range(self.n_nodes):
+            self.nodes.append({
+                'x': (random.random() - 0.5) * 2,
+                'y': (random.random() - 0.5) * 2,
+                'z': (random.random() - 0.5) * 2,
+                'vx': (random.random() - 0.5) * 0.002,
+                'vy': (random.random() - 0.5) * 0.002,
+                'vz': (random.random() - 0.5) * 0.002,
+                'pulse': random.random() * math.pi * 2
+            })
+        # Build edges - connect nearby nodes
+        self.edges_idx = []
+        for i in range(self.n_nodes):
+            for j in range(i + 1, self.n_nodes):
+                d = sum((self.nodes[i][k] - self.nodes[j][k])**2 for k in ['x', 'y', 'z'])
+                if d < 0.8:
+                    self.edges_idx.append((i, j))
+
+    def update(self):
+        self.t += 0.01
+        self.angle_x += 0.004
+        self.angle_y += 0.006
+        self.angle_z += 0.003
+        self.hue_offset += 0.003
+        # Animate nodes
+        for n in self.nodes:
+            n['x'] += n['vx']
+            n['y'] += n['vy']
+            n['z'] += n['vz']
+            n['pulse'] += 0.05
+            # Bounce off boundaries
+            for k in ['x', 'y', 'z']:
+                if abs(n[k]) > 1:
+                    n['v' + k] *= -1
+
+    def _rotate(self, x, y, z):
+        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
+        x, z = x * cy - z * sy, x * sy + z * cy
+        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
+        y, z = y * cx - z * sx, y * sx + z * cx
+        cz, sz = math.cos(self.angle_z), math.sin(self.angle_z)
+        x, y = x * cz - y * sz, x * sz + y * cz
+        return x, y, z
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.35
+            edges = []
+
+            # Project nodes
+            projected = []
+            for n in self.nodes:
+                x, y, z = self._rotate(n['x'], n['y'], n['z'])
+                d = 4.0
+                s = d / (d - z)
+                px, py = cx + x * s * size, cy - y * s * size
+                pulse = 0.5 + 0.5 * math.sin(n['pulse'])
+                projected.append((px, py, z, s, pulse))
+
+            # Draw edges
+            for idx, (i, j) in enumerate(self.edges_idx):
+                x1, y1, z1, s1, p1 = projected[i]
+                x2, y2, z2, s2, p2 = projected[j]
+                hue = (idx / max(1, len(self.edges_idx)) + self.hue_offset) % 1.0
+                brightness = 0.3 + 0.4 * (p1 + p2) / 2
+                lw = max(1, int(2.5 * (s1 + s2) / 2))
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.75, brightness), lw))
+
+            # Draw node halos
+            for i, (px, py, z, s, pulse) in enumerate(projected):
+                hue = (i / self.n_nodes + self.hue_offset + 0.5) % 1.0
+                r = 8 * s * (0.7 + 0.3 * pulse)
+                n_seg = 8
+                for j in range(n_seg):
+                    a1 = j * 2 * math.pi / n_seg + self.t
+                    a2 = (j + 1) * 2 * math.pi / n_seg + self.t
+                    x1, y1 = px + r * math.cos(a1), py + r * math.sin(a1)
+                    x2, y2 = px + r * math.cos(a2), py + r * math.sin(a2)
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.9, 0.5 + 0.4 * pulse), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 14: Uzumaki Spiral (3D Curlicue Fractal)
+# =============================================================================
+class UzumakiSpiral3D:
+    """3D Curlicue Fractal spiral with hypnotic rotation"""
+    name = "Uzumaki Spiral"
+    num_lines = 450
+
+    def __init__(self):
+        self.angle_xz = 0.0  # Rotation around Y axis
+        self.angle_yz = 0.0  # Tilt
+        self.t = 0.0         # Time parameter for spiral evolution
+        self.hue_offset = 0.0
+        self.n_points = 380
+        self.s = 2.39996323  # Silver ratio - creates beautiful curlicue pattern
+
+    def update(self):
+        self.angle_xz += 0.011  # Smooth rotation
+        self.angle_yz += 0.004  # Slow tilt
+        self.t += 0.006        # Spiral evolution
+        self.hue_offset += 0.003
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.35
+            edges = []
+            d = 4.0  # Viewing distance for perspective
+
+            # Generate 3D points using Curlicue formula
+            points_3d = []
+            cumulative_angle = 0.0
+            breath = 1 + 0.15 * math.sin(self.t * 0.8)  # Breathing effect
+
+            for n in range(1, self.n_points + 1):
+                # Curlicue: angle accumulates by s*n (creates fractal pattern)
+                cumulative_angle += self.s + 0.0001 * math.sin(self.t + n * 0.02)
+
+                # Radius grows with sqrt for even distribution
+                r = math.sqrt(n) * 0.08 * breath
+
+                # 3D coordinates - spiral rises in Z
+                x = r * math.cos(cumulative_angle)
+                y = r * math.sin(cumulative_angle)
+                z = (n / self.n_points - 0.5) * 2.5  # Z from -1.25 to 1.25
+
+                points_3d.append((x, y, z, n / self.n_points))
+
+            # Apply 3D rotations and project
+            projected = []
+            cos_xz, sin_xz = math.cos(self.angle_xz), math.sin(self.angle_xz)
+            cos_yz, sin_yz = math.cos(self.angle_yz), math.sin(self.angle_yz)
+
+            for x, y, z, t in points_3d:
+                # XZ rotation (around Y axis)
+                x2 = x * cos_xz - z * sin_xz
+                z2 = x * sin_xz + z * cos_xz
+
+                # YZ rotation (tilt)
+                y2 = y * cos_yz - z2 * sin_yz
+                z3 = y * sin_yz + z2 * cos_yz
+
+                # Perspective projection
+                scale = d / (d - z3) if (d - z3) > 0.1 else d / 0.1
+                screen_x = cx + x2 * scale * size
+                screen_y = cy - y2 * scale * size
+
+                # Depth for coloring (0 = far, 1 = close)
+                depth = (z3 + 2) / 4  # Normalize z3 to 0-1 range
+
+                projected.append((screen_x, screen_y, depth, scale, t))
+
+            # Draw lines connecting consecutive points
+            for i in range(1, len(projected)):
+                x1, y1, d1, s1, t1 = projected[i - 1]
+                x2, y2, d2, s2, t2 = projected[i]
+
+                # Color based on position + depth
+                hue = (t2 + self.hue_offset) % 1.0
+                avg_depth = (d1 + d2) / 2
+                brightness = 0.4 + avg_depth * 0.55  # Closer = brighter
+                saturation = 0.7 + avg_depth * 0.25
+
+                # Line width based on scale (perspective)
+                avg_scale = (s1 + s2) / 2
+                lw = max(1, min(4, int(avg_scale * 1.8)))
+
+                edges.append((x1, y1, x2, y2,
+                             hsv_to_hex(hue, saturation, brightness), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 15: Fourier Epicycles
+# =============================================================================
+class FourierEpicycles:
+    """Epicycles drawing complex shapes - Fourier transform visualization"""
+    name = "Fourier Epicycles"
+    num_lines = 650  # circles(8*24=192) + arms(8) + trail(400) + buffer
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.trail = []
+        self.max_trail = 400
+        # Define epicycles: (radius, frequency, phase)
+        self.n_cycles = random.randint(5, 8)
+        self.cycles = []
+        for i in range(self.n_cycles):
+            r = 1.0 / (2 * i + 1)  # Decreasing radii
+            freq = 2 * i + 1  # Odd harmonics (square wave approx)
+            phase = random.random() * math.pi * 2
+            self.cycles.append((r * 0.8, freq, phase))
+
+    def update(self):
+        self.t += 0.015
+        self.hue_offset += 0.003
+
+        # Calculate endpoint (same logic as in get_edges for arm endpoint)
+        x, y = 0.0, 0.0
+        for r, freq, phase in self.cycles:
+            x += r * math.cos(freq * self.t + phase)
+            y += r * math.sin(freq * self.t + phase)
+        self.trail.append((x, y))
+        if len(self.trail) > self.max_trail:
+            self.trail = self.trail[-self.max_trail:]
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.3
+            edges = []
+
+            # Draw epicycle circles and arms
+            x, y = 0.0, 0.0
+            for ci, (r, freq, phase) in enumerate(self.cycles):
+                # Circle (fewer segments for efficiency)
+                n_seg = 16
+                hue = (ci / self.n_cycles + self.hue_offset) % 1.0
+                for i in range(n_seg):
+                    a1 = i * 2 * math.pi / n_seg
+                    a2 = (i + 1) * 2 * math.pi / n_seg
+                    x1 = cx + (x + r * math.cos(a1)) * size
+                    y1 = cy - (y + r * math.sin(a1)) * size
+                    x2 = cx + (x + r * math.cos(a2)) * size
+                    y2 = cy - (y + r * math.sin(a2)) * size
+                    edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.5, 0.4), 1))
+
+                # Arm to next center
+                nx = x + r * math.cos(freq * self.t + phase)
+                ny = y + r * math.sin(freq * self.t + phase)
+                edges.append((cx + x * size, cy - y * size,
+                             cx + nx * size, cy - ny * size,
+                             hsv_to_hex(hue, 0.9, 0.85), 2))
+                x, y = nx, ny
+
+            # Connect final pendulum position to trail start (if trail exists)
+            if len(self.trail) > 0:
+                tx, ty = self.trail[-1]
+                edges.append((cx + x * size, cy - y * size,
+                             cx + tx * size, cy - ty * size,
+                             hsv_to_hex((self.hue_offset + 0.5) % 1.0, 0.95, 0.9), 3))
+
+            # Draw trail
+            for i in range(1, len(self.trail)):
+                t = i / len(self.trail)
+                hue = (t + self.hue_offset + 0.5) % 1.0
+                x1, y1 = self.trail[i - 1]
+                x2, y2 = self.trail[i]
+                edges.append((cx + x1 * size, cy - y1 * size,
+                             cx + x2 * size, cy - y2 * size,
+                             hsv_to_hex(hue, 0.9, 0.5 + t * 0.5), 3))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 16: Geodesic Sphere (Triangulated)
+# =============================================================================
+class GeodesicSphere:
+    """Slowly rotating sphere made of triangles - icosahedron subdivision"""
+    name = "Geodesic Sphere"
+    num_lines = 400
+
+    def __init__(self):
+        self.angle_x = 0.0
+        self.angle_y = 0.0
+        self.angle_z = 0.0
+        self.hue_offset = 0.0
+        self.subdivisions = 2  # Level of detail
+
+        # Generate icosahedron vertices
+        phi = (1 + math.sqrt(5)) / 2  # Golden ratio
+        self.base_verts = [
+            (-1, phi, 0), (1, phi, 0), (-1, -phi, 0), (1, -phi, 0),
+            (0, -1, phi), (0, 1, phi), (0, -1, -phi), (0, 1, -phi),
+            (phi, 0, -1), (phi, 0, 1), (-phi, 0, -1), (-phi, 0, 1)
+        ]
+        # Normalize to unit sphere
+        self.base_verts = [self._normalize(v) for v in self.base_verts]
+
+        # Icosahedron faces (20 triangles)
+        self.base_faces = [
+            (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+            (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+            (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+            (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)
+        ]
+
+        # Subdivide for smoother sphere
+        self.vertices, self.edges = self._subdivide_icosahedron()
+
+    def _normalize(self, v):
+        length = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+        if length < 0.0001:
+            return (0, 0, 1)
+        return (v[0]/length, v[1]/length, v[2]/length)
+
+    def _midpoint(self, v1, v2):
+        mid = ((v1[0]+v2[0])/2, (v1[1]+v2[1])/2, (v1[2]+v2[2])/2)
+        return self._normalize(mid)  # Project to sphere
+
+    def _subdivide_icosahedron(self):
+        vertices = list(self.base_verts)
+        faces = list(self.base_faces)
+
+        for _ in range(self.subdivisions):
+            new_faces = []
+            edge_cache = {}
+
+            for f in faces:
+                v0, v1, v2 = f
+                # Get or create midpoints
+                mids = []
+                for edge in [(v0, v1), (v1, v2), (v2, v0)]:
+                    key = tuple(sorted(edge))
+                    if key not in edge_cache:
+                        mid = self._midpoint(vertices[edge[0]], vertices[edge[1]])
+                        edge_cache[key] = len(vertices)
+                        vertices.append(mid)
+                    mids.append(edge_cache[key])
+
+                m01, m12, m20 = mids
+                new_faces.extend([
+                    (v0, m01, m20), (v1, m12, m01),
+                    (v2, m20, m12), (m01, m12, m20)
+                ])
+            faces = new_faces
+
+        # Extract unique edges from faces
+        edge_set = set()
+        for f in faces:
+            v0, v1, v2 = f
+            for e in [(v0, v1), (v1, v2), (v2, v0)]:
+                edge_set.add(tuple(sorted(e)))
+
+        return vertices, list(edge_set)
+
+    def update(self):
+        self.angle_x += 0.004  # Very slow rotation
+        self.angle_y += 0.006
+        self.angle_z += 0.002
+        self.hue_offset += 0.002
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            size = min(width, height) * 0.38
+            d = 4.0  # Viewing distance
+            edges = []
+
+            # Rotation matrices
+            cx_r, sx_r = math.cos(self.angle_x), math.sin(self.angle_x)
+            cy_r, sy_r = math.cos(self.angle_y), math.sin(self.angle_y)
+            cz_r, sz_r = math.cos(self.angle_z), math.sin(self.angle_z)
+
+            # Transform and project vertices
+            projected = []
+            for vx, vy, vz in self.vertices:
+                # Rotate X
+                y1 = vy * cx_r - vz * sx_r
+                z1 = vy * sx_r + vz * cx_r
+                # Rotate Y
+                x2 = vx * cy_r + z1 * sy_r
+                z2 = -vx * sy_r + z1 * cy_r
+                # Rotate Z
+                x3 = x2 * cz_r - y1 * sz_r
+                y3 = x2 * sz_r + y1 * cz_r
+
+                # Perspective
+                scale = d / (d - z2) if (d - z2) > 0.1 else d / 0.1
+                sx = cx + x3 * scale * size
+                sy = cy - y3 * scale * size
+                depth = (z2 + 1.5) / 3  # Normalize depth 0-1
+
+                projected.append((sx, sy, depth, scale))
+
+            # Draw edges
+            for i, (v1, v2) in enumerate(self.edges):
+                x1, y1, d1, s1 = projected[v1]
+                x2, y2, d2, s2 = projected[v2]
+
+                avg_depth = (d1 + d2) / 2
+                hue = (i / len(self.edges) + self.hue_offset) % 1.0
+                brightness = 0.35 + avg_depth * 0.6
+                saturation = 0.6 + avg_depth * 0.35
+
+                lw = max(1, int((s1 + s2) / 2 * 1.5))
+
+                edges.append((x1, y1, x2, y2,
+                             hsv_to_hex(hue, saturation, brightness), lw))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 17: Bouncing Particles
+# =============================================================================
+class BouncingParticles:
+    """Particles bouncing off walls and obstacles - dynamic simulation"""
+    name = "Bouncing Particles"
+    num_lines = 500
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.n_particles = 35
+        self.trail_len = 18
+        # Each particle: [x, y, vx, vy, hue, trail]
+        self.particles = []
+        for i in range(self.n_particles):
+            angle = random.random() * 2 * math.pi
+            speed = random.uniform(3, 7)
+            self.particles.append({
+                'x': random.uniform(0.2, 0.8),
+                'y': random.uniform(0.2, 0.8),
+                'vx': math.cos(angle) * speed * 0.01,
+                'vy': math.sin(angle) * speed * 0.01,
+                'hue': i / self.n_particles,
+                'trail': []
+            })
+        self.obstacle_radius = 0.12
+        self.obstacle_angle = 0.0
+
+    def update(self):
+        self.t += 0.016
+        self.hue_offset += 0.002
+        self.obstacle_angle += 0.008
+
+        # Update particles
+        for p in self.particles:
+            # Store trail
+            p['trail'].append((p['x'], p['y']))
+            if len(p['trail']) > self.trail_len:
+                p['trail'] = p['trail'][-self.trail_len:]
+
+            # Move
+            p['x'] += p['vx']
+            p['y'] += p['vy']
+
+            # Bounce off walls
+            if p['x'] < 0.08 or p['x'] > 0.92:
+                p['vx'] *= -1
+                p['x'] = max(0.08, min(0.92, p['x']))
+                p['hue'] = (p['hue'] + 0.1) % 1.0
+            if p['y'] < 0.12 or p['y'] > 0.88:
+                p['vy'] *= -1
+                p['y'] = max(0.12, min(0.88, p['y']))
+                p['hue'] = (p['hue'] + 0.1) % 1.0
+
+            # Bounce off central obstacle (moving)
+            obs_x = 0.5 + 0.15 * math.cos(self.obstacle_angle)
+            obs_y = 0.5 + 0.15 * math.sin(self.obstacle_angle * 0.7)
+            dx = p['x'] - obs_x
+            dy = p['y'] - obs_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist < self.obstacle_radius and dist > 0.001:
+                # Normalize and reflect
+                nx, ny = dx / dist, dy / dist
+                dot = p['vx'] * nx + p['vy'] * ny
+                if dot < 0:  # Moving towards obstacle
+                    p['vx'] -= 2 * dot * nx
+                    p['vy'] -= 2 * dot * ny
+                    # Push out
+                    p['x'] = obs_x + nx * (self.obstacle_radius + 0.01)
+                    p['y'] = obs_y + ny * (self.obstacle_radius + 0.01)
+                    p['hue'] = (p['hue'] + 0.15) % 1.0
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            edges = []
+
+            # Draw boundary rectangle
+            margin = min(width, height) * 0.08
+            corners = [
+                (margin, margin * 1.5),
+                (width - margin, margin * 1.5),
+                (width - margin, height - margin),
+                (margin, height - margin)
+            ]
+            for i in range(4):
+                x1, y1 = corners[i]
+                x2, y2 = corners[(i + 1) % 4]
+                hue = (i * 0.25 + self.hue_offset) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.4, 0.4), 2))
+
+            # Draw moving obstacle circle
+            obs_x = 0.5 + 0.15 * math.cos(self.obstacle_angle)
+            obs_y = 0.5 + 0.15 * math.sin(self.obstacle_angle * 0.7)
+            obs_px = margin + obs_x * (width - 2 * margin)
+            obs_py = margin * 1.5 + obs_y * (height - margin * 2.5)
+            obs_r = self.obstacle_radius * min(width - 2 * margin, height - margin * 2.5)
+            n_seg = 24
+            for i in range(n_seg):
+                a1 = i * 2 * math.pi / n_seg
+                a2 = (i + 1) * 2 * math.pi / n_seg
+                x1 = obs_px + obs_r * math.cos(a1)
+                y1 = obs_py + obs_r * math.sin(a1)
+                x2 = obs_px + obs_r * math.cos(a2)
+                y2 = obs_py + obs_r * math.sin(a2)
+                hue = (i / n_seg + self.hue_offset + 0.5) % 1.0
+                edges.append((x1, y1, x2, y2, hsv_to_hex(hue, 0.6, 0.55), 2))
+
+            # Draw particles and trails
+            w_inner = width - 2 * margin
+            h_inner = height - margin * 2.5
+            for p in self.particles:
+                trail = p['trail']
+                hue = (p['hue'] + self.hue_offset) % 1.0
+
+                # Draw trail
+                for i in range(1, len(trail)):
+                    t = i / len(trail)
+                    x1 = margin + trail[i-1][0] * w_inner
+                    y1 = margin * 1.5 + trail[i-1][1] * h_inner
+                    x2 = margin + trail[i][0] * w_inner
+                    y2 = margin * 1.5 + trail[i][1] * h_inner
+                    trail_hue = (hue + (1 - t) * 0.2) % 1.0
+                    edges.append((x1, y1, x2, y2,
+                                 hsv_to_hex(trail_hue, 0.85, 0.3 + t * 0.6),
+                                 max(1, int(t * 3))))
+
+                # Draw current position as small cross
+                px = margin + p['x'] * w_inner
+                py = margin * 1.5 + p['y'] * h_inner
+                size = 4
+                edges.append((px - size, py, px + size, py, hsv_to_hex(hue, 0.9, 0.95), 2))
+                edges.append((px, py - size, px, py + size, hsv_to_hex(hue, 0.9, 0.95), 2))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# VISUALIZATION 18: Tunnel Flight (Curved Warp Tunnel)
+# =============================================================================
+class TunnelFlight:
+    """High-speed flight through a curved tunnel of rectangles"""
+    name = "Tunnel Flight"
+    num_lines = 500
+
+    def __init__(self):
+        self.t = 0.0
+        self.hue_offset = 0.0
+        self.speed = 0.06  # How fast frames approach
+        self.n_frames = 7  # Number of rectangular frames in tunnel
+        self.curve_freq_x = 0.4  # Curvature frequency X
+        self.curve_freq_y = 0.3  # Curvature frequency Y
+        self.curve_amp = 0.35  # Curvature amplitude
+        # Initialize frame Z positions (0 = closest, 1 = farthest)
+        self.frames = [{'z': i / self.n_frames, 'phase': random.random() * math.pi * 2}
+                       for i in range(self.n_frames)]
+
+    def update(self):
+        self.t += self.speed
+        self.hue_offset += 0.004
+        # Move frames towards viewer
+        for f in self.frames:
+            f['z'] -= self.speed * 0.08
+            # Respawn at far end when passing viewer
+            if f['z'] < 0.02:
+                f['z'] = 1.0
+                f['phase'] = random.random() * math.pi * 2
+
+    def get_edges(self, width, height):
+        try:
+            cx, cy = width / 2, height / 2
+            edges = []
+
+            # Sort frames by Z (far to near) for proper depth rendering
+            sorted_frames = sorted(self.frames, key=lambda f: -f['z'])
+
+            for fi, frame in enumerate(sorted_frames):
+                z = frame['z']
+                if z < 0.03:
+                    continue  # Skip frames too close
+
+                # Perspective scale: closer = larger
+                # Using exponential for more dramatic effect
+                perspective = 1.0 / (z * 2.5 + 0.1)
+
+                # Curved path offset based on Z depth
+                # This creates the winding tunnel effect
+                curve_x = self.curve_amp * math.sin(self.t * self.curve_freq_x + z * 8)
+                curve_y = self.curve_amp * math.cos(self.t * self.curve_freq_y + z * 6 + 1.5)
+
+                # Frame center position (offset by curve)
+                frame_cx = cx + curve_x * width * 0.4 * (1 - z)
+                frame_cy = cy + curve_y * height * 0.3 * (1 - z)
+
+                # Rectangle size (larger when closer)
+                base_size = min(width, height) * 0.45
+                rect_w = base_size * perspective
+                rect_h = base_size * perspective * 0.7  # Slightly shorter height
+
+                # Slight rotation for added dynamism
+                rotation = math.sin(self.t * 0.3 + z * 4) * 0.15
+                cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+
+                # Four corners of rectangle (before rotation)
+                corners_local = [
+                    (-rect_w/2, -rect_h/2),
+                    (rect_w/2, -rect_h/2),
+                    (rect_w/2, rect_h/2),
+                    (-rect_w/2, rect_h/2)
+                ]
+
+                # Apply rotation and translate to frame center
+                corners = []
+                for lx, ly in corners_local:
+                    rx = lx * cos_r - ly * sin_r
+                    ry = lx * sin_r + ly * cos_r
+                    corners.append((frame_cx + rx, frame_cy + ry))
+
+                # Color based on depth (far = darker/bluer, close = brighter)
+                depth_factor = 1 - z  # 0 when far, 1 when close
+                hue = (z * 0.6 + self.hue_offset) % 1.0
+                saturation = 0.6 + depth_factor * 0.35
+                brightness = 0.25 + depth_factor * 0.7
+
+                color = hsv_to_hex(hue, saturation, brightness)
+                lw = max(1, int(2 + depth_factor * 3))
+
+                # Draw rectangle edges
+                for i in range(4):
+                    x1, y1 = corners[i]
+                    x2, y2 = corners[(i + 1) % 4]
+                    edges.append((x1, y1, x2, y2, color, lw))
+
+                # Add inner detail lines for closer frames
+                if z < 0.5 and depth_factor > 0.3:
+                    inner_scale = 0.7
+                    inner_corners = []
+                    for lx, ly in corners_local:
+                        rx = lx * inner_scale * cos_r - ly * inner_scale * sin_r
+                        ry = lx * inner_scale * sin_r + ly * inner_scale * cos_r
+                        inner_corners.append((frame_cx + rx, frame_cy + ry))
+
+                    inner_hue = (hue + 0.15) % 1.0
+                    inner_color = hsv_to_hex(inner_hue, saturation * 0.8, brightness * 0.7)
+                    inner_lw = max(1, lw - 1)
+
+                    for i in range(4):
+                        x1, y1 = inner_corners[i]
+                        x2, y2 = inner_corners[(i + 1) % 4]
+                        edges.append((x1, y1, x2, y2, inner_color, inner_lw))
+
+                    # Connecting lines from outer to inner corners
+                    for i in range(4):
+                        ox, oy = corners[i]
+                        ix, iy = inner_corners[i]
+                        conn_color = hsv_to_hex((hue + 0.3) % 1.0, saturation * 0.6, brightness * 0.5)
+                        edges.append((ox, oy, ix, iy, conn_color, 1))
+
+            # Add motion blur / speed lines at edges
+            n_speed_lines = 12
+            for i in range(n_speed_lines):
+                angle = i * 2 * math.pi / n_speed_lines
+                # Lines emanate from center towards edges
+                inner_r = min(width, height) * 0.1
+                outer_r = min(width, height) * 0.48
+
+                # Animate the speed lines
+                phase = self.t * 3 + i * 0.5
+                line_alpha = 0.3 + 0.3 * math.sin(phase)
+
+                x1 = cx + inner_r * math.cos(angle)
+                y1 = cy + inner_r * math.sin(angle)
+                x2 = cx + outer_r * math.cos(angle)
+                y2 = cy + outer_r * math.sin(angle)
+
+                speed_hue = (i / n_speed_lines + self.hue_offset + 0.5) % 1.0
+                speed_color = hsv_to_hex(speed_hue, 0.5, line_alpha)
+                edges.append((x1, y1, x2, y2, speed_color, 1))
+
+            return edges
+        except Exception:
+            return []
+
+
+# =============================================================================
+# CURSOR TRACKER
+# =============================================================================
+
+class CursorTracker:
+    """Tracks mouse position, detects cursor absence after timeout"""
+    def __init__(self):
+        self.mouse_x = 0.0
+        self.mouse_y = 0.0
+        self.last_move_time = 0.0
+        self.cursor_present = False
+
+    def on_motion(self, event):
+        self.mouse_x = event.x
+        self.mouse_y = event.y
+        self.last_move_time = time.time()
+        self.cursor_present = True
+
+    def update(self):
+        if time.time() - self.last_move_time > CONFIG['cursor_timeout']:
+            self.cursor_present = False
+
+
+# =============================================================================
+# WANDERING BODY (BASE CLASS)
+# =============================================================================
+
+class WanderingBody:
+    """Base class for cursor-following creatures with wandering fallback"""
+    def __init__(self, x, y, speed=1.0):
+        self.x = x
+        self.y = y
+        self.speed = speed
+        self.target_x = x
+        self.target_y = y
+        self.wander_timer = 0
+        self.phase = random.random() * math.pi * 2  # for organic drift
+        self.width = 900  # updated on resize
+        self.height = 700
+
+    def update_position(self, cursor):
+        """Update position based on cursor state"""
+        self.phase += 0.02
+
+        if cursor.cursor_present:
+            dx = cursor.mouse_x - self.x
+            dy = cursor.mouse_y - self.y
+            dist = math.sqrt(dx * dx + dy * dy) + 0.001
+            if dist > CONFIG['min_follow_distance']:
+                self.x += dx * CONFIG['follow_ease'] * self.speed
+                self.y += dy * CONFIG['follow_ease'] * self.speed
+            # Perpendicular organic drift
+            perp_x = -dy / dist * math.sin(self.phase) * 0.5
+            perp_y = dx / dist * math.sin(self.phase) * 0.5
+            self.x += perp_x
+            self.y += perp_y
+        else:
+            # Wander mode
+            dx = self.target_x - self.x
+            dy = self.target_y - self.y
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist < 50:
+                # Pick new random target
+                margin = 100
+                self.target_x = random.uniform(margin, self.width - margin)
+                self.target_y = random.uniform(margin, self.height - margin)
+            self.x += dx * CONFIG['wander_ease'] * self.speed
+            self.y += dy * CONFIG['wander_ease'] * self.speed
+
+    def resize(self, w, h):
+        self.width = w
+        self.height = h
+
+    def get_edges(self):
+        """Override in subclass — returns list of (x1,y1,x2,y2,color,linewidth)"""
+        return []
+
+
+# =============================================================================
+# HILBERT CURVE
+# =============================================================================
+
+class HilbertCurve:
+    """Order-4 Hilbert curve — morphs from a straight line into the full fractal."""
+    name = "Hilbert Curve"
+    num_lines = 255
+
+    def __init__(self):
+        self.order = CONFIG['hilbert_order']
+        self.n = 1 << self.order          # grid size: 16 for order=4
+        self.total = self.n * self.n      # 256 points
+        self.hue_offset = 0.0
+        self.morph_time = 0.0
+        # Line positions: all 256 points evenly spaced on a horizontal line
+        self._line_points = [(i / (self.total - 1), 0.5) for i in range(self.total)]
+        # Curve positions: normalized Hilbert curve in [0,1]x[0,1]
+        self._curve_points = self._build_normalized_points()
+
+    # ------------------------------------------------------------------
+    # Hilbert index → (x, y) coordinate
+    # ------------------------------------------------------------------
+    def _hilbert_d2xy(self, n, d):
+        """Convert Hilbert curve index d to (x,y) for n×n grid"""
+        x = y = 0
+        s = 1
+        while s < n:
+            rx = 1 if (d & 2) else 0
+            ry = 1 if ((d & 1) ^ rx) else 0  # XOR
+            # Rotate quadrant
+            if ry == 0:
+                if rx == 1:
+                    x = s - 1 - x
+                    y = s - 1 - y
+                x, y = y, x
+            x += s * rx
+            y += s * ry
+            d >>= 2
+            s <<= 1
+        return x, y
+
+    def _build_normalized_points(self):
+        """Build list of (nx, ny) in [0..1] x [0..1] for all curve indices."""
+        n = self.n
+        pts = []
+        for d in range(self.total):
+            gx, gy = self._hilbert_d2xy(n, d)
+            pts.append((gx / (n - 1), gy / (n - 1)))
+        return pts
+
+    # ------------------------------------------------------------------
+    # Quadrant-based hue mapping
+    # ------------------------------------------------------------------
+    def _segment_color(self, x_norm, y_norm, t, seg_frac):
+        """
+        Return HSV hue for a segment at normalized canvas position.
+        t          = position within quadrant [0..1]
+        seg_frac   = overall fraction along entire curve [0..1]
+        """
+        in_left  = x_norm < 0.5
+        in_top   = y_norm < 0.5
+
+        if in_top and in_left:       # Q1: blue → cyan
+            hue_base = 0.55 + t * 0.20
+        elif in_top and not in_left: # Q2: green → yellow
+            hue_base = 0.20 + t * 0.20
+        elif not in_top and in_left: # Q3: yellow → orange
+            hue_base = 0.08 + t * 0.10
+        else:                        # Q4: pink → magenta
+            hue_base = 0.80 + t * 0.15
+
+        hue = (hue_base + self.hue_offset) % 1.0
+        # Slightly vary brightness by position for depth
+        value = 0.65 + 0.25 * math.sin(seg_frac * math.pi * 4 + self.hue_offset * 8)
+        saturation = 0.75 + 0.20 * math.cos(seg_frac * math.pi * 6)
+        saturation = max(0.0, min(1.0, saturation))
+        value = max(0.0, min(1.0, value))
+        return hsv_to_hex(hue, saturation, value)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def update(self):
+        self.hue_offset = (self.hue_offset + CONFIG['color_cycle_speed']) % 1.0
+        self.morph_time += 0.02
+
+    def _morph_factor(self):
+        """Returns 0.0 (line) to 1.0 (curve), cycling over 9 seconds."""
+        t = self.morph_time % 9.0
+        if t < 3.0:       # line → curve (ease-out)
+            g = t / 3.0
+            return g * (2 - g)
+        elif t < 5.0:     # hold as curve
+            return 1.0
+        elif t < 8.0:     # curve → line (ease-in)
+            g = (t - 5.0) / 3.0
+            return 1.0 - g * g
+        else:              # brief pause as line
+            return 0.0
+
+    def get_edges(self, width, height):
+        """Hilbert curve morphing from a straight horizontal line into the fractal."""
+        margin = 60
+        side = min(width, height) - 2 * margin
+        if side < 10:
+            return []
+
+        cx, cy = width / 2, height / 2
+        x0, y0 = cx - side / 2, cy - side / 2
+        morph = self._morph_factor()
+        total = self.total
+        lw = 1.5 + morph * 1.0
+        edges = []
+
+        for i in range(total - 1):
+            lx1, ly1 = self._line_points[i]
+            cpx1, cpy1 = self._curve_points[i]
+            nx1 = lx1 + (cpx1 - lx1) * morph
+            ny1 = ly1 + (cpy1 - ly1) * morph
+
+            lx2, ly2 = self._line_points[i + 1]
+            cpx2, cpy2 = self._curve_points[i + 1]
+            nx2 = lx2 + (cpx2 - lx2) * morph
+            ny2 = ly2 + (cpy2 - ly2) * morph
+
+            sx1 = x0 + nx1 * side
+            sy1 = y0 + ny1 * side
+            sx2 = x0 + nx2 * side
+            sy2 = y0 + ny2 * side
+
+            # Coloring based on CURVE positions (stable during morph)
+            mx_norm = (cpx1 + cpx2) / 2
+            my_norm = (cpy1 + cpy2) / 2
+            t_qx = (mx_norm % 0.5) / 0.5
+            t_qy = (my_norm % 0.5) / 0.5
+            t = (t_qx + t_qy) / 2
+            seg_frac = i / (total - 1)
+
+            color = self._segment_color(mx_norm, my_norm, t, seg_frac)
+            edges.append((sx1, sy1, sx2, sy2, color, max(1, lw)))
+
+        return edges
+
+
+# =============================================================================
+# IK HELPER (shared by SpiderCreature + StickPerson)
+# =============================================================================
+
+def solve_2bone_ik(hip_x, hip_y, foot_x, foot_y, seg1_len, seg2_len, side=1):
+    """
+    2-segment IK: returns knee (x, y).
+    side=1 → knee bends to the left of hip→foot direction
+    side=-1 → knee bends to the right
+    """
+    dx = foot_x - hip_x
+    dy = foot_y - hip_y
+    dist = math.sqrt(dx * dx + dy * dy) + 0.0001
+    # Clamp so the legs don't over-extend (triangle inequality)
+    dist = min(dist, seg1_len + seg2_len - 0.5)
+    dist = max(dist, abs(seg1_len - seg2_len) + 0.5)
+
+    cos_angle = (seg1_len ** 2 + dist ** 2 - seg2_len ** 2) / (2 * seg1_len * dist)
+    cos_angle = max(-1.0, min(1.0, cos_angle))
+    angle_to_target = math.atan2(dy, dx)
+    angle_offset = math.acos(cos_angle)
+
+    knee_angle = angle_to_target - angle_offset * side
+    knee_x = hip_x + seg1_len * math.cos(knee_angle)
+    knee_y = hip_y + seg1_len * math.sin(knee_angle)
+    return knee_x, knee_y
+
+
+# =============================================================================
+# CREATURE 1: SpiderCreature — 8-legged beauty with tetrapod gait + IK
+# =============================================================================
+
+class SpiderCreature(WanderingBody):
+    """
+    8-legged spider with:
+    - 2-segment IK per leg
+    - Tetrapod alternating gait (groups A & B)
+    - Organic foot stepping with parabolic lift arc
+    - Warm color cycling (red → orange → yellow)
+    - Body segments drawn as crossing diamonds
+    """
+
+    def __init__(self, x, y):
+        super().__init__(x, y, speed=1.2)
+        self.hue_offset = 0.0
+        self.base_hue = 0.02   # deep red-orange
+        self.num_legs = 8
+        self.seg1_len = 52
+        self.seg2_len = 50
+        self.body_radius = 22
+
+        # Leg attachment angles (relative to body center, in radians)
+        spread = math.pi / 5.5  # ~33° between pairs
+        self.hip_angles = []
+        for i in range(4):
+            angle_right = -spread * (1.5 - i)
+            angle_left  =  math.pi + spread * (i - 1.5)
+            self.hip_angles.append(angle_right)
+            self.hip_angles.append(angle_left)
+
+        self.hip_offset = self.body_radius * 0.9
+
+        # Ground targets for each foot (world coords)
+        self.foot_ground = []
+        self.foot_current = []
+        self.stepping = []
+        self.step_progress = []
+        self.step_from = []
+        self.step_to = []
+        self.step_height = []
+
+        # Leg IK side — which way knee bends
+        self.ik_side = [1, -1, 1, -1, 1, -1, 1, -1]
+
+        # Initialize foot positions at natural rest stance
+        for i in range(self.num_legs):
+            angle = self.hip_angles[i]
+            rest_dist = (self.seg1_len + self.seg2_len) * 0.7
+            gx = x + math.cos(angle) * rest_dist
+            gy = y + math.sin(angle) * rest_dist
+            self.foot_ground.append([gx, gy])
+            self.foot_current.append([gx, gy])
+            self.stepping.append(False)
+            self.step_progress.append(0.0)
+            self.step_from.append([gx, gy])
+            self.step_to.append([gx, gy])
+            self.step_height.append(18.0)
+
+        # Gait cooldowns
+        self.gait_cooldown = [0] * self.num_legs
+
+        # Body bob animation
+        self.body_bob = 0.0
+        self.prev_x = x
+        self.prev_y = y
+        self.velocity = 0.0
+
+        # Eye blink state
+        self.blink_timer = 0
+        self.eye_open = 1.0
+
+    def _get_hip_pos(self, leg_idx):
+        """Hip socket position in world space."""
+        angle = self.hip_angles[leg_idx]
+        hx = self.x + math.cos(angle) * self.hip_offset
+        hy = self.y + math.sin(angle) * self.hip_offset
+        return hx, hy
+
+    def _ideal_foot_target(self, leg_idx):
+        """Where this foot 'wants' to be when stepping."""
+        angle = self.hip_angles[leg_idx]
+        reach = self.seg1_len + self.seg2_len
+        vx = self.x - self.prev_x
+        vy = self.y - self.prev_y
+        spd = math.sqrt(vx * vx + vy * vy) + 0.001
+        overshoot = min(spd * 8, 25)
+        tx = self.x + math.cos(angle) * (reach * 0.68) + vx / spd * overshoot
+        ty = self.y + math.sin(angle) * (reach * 0.68) + vy / spd * overshoot
+        return tx, ty
+
+    def _dist_from_home(self, leg_idx):
+        """How far current ground target is from ideal position."""
+        gx, gy = self.foot_ground[leg_idx]
+        tx, ty = self._ideal_foot_target(leg_idx)
+        return math.sqrt((gx - tx) ** 2 + (gy - ty) ** 2)
+
+    def update_animation(self):
+        dx = self.x - self.prev_x
+        dy = self.y - self.prev_y
+        self.velocity = math.sqrt(dx * dx + dy * dy)
+        self.prev_x = self.x
+        self.prev_y = self.y
+
+        self.body_bob = math.sin(self.phase * 3) * 1.5
+        self.hue_offset = (self.hue_offset + 0.003) % 1.0
+
+        # Eye blink
+        self.blink_timer += 1
+        if self.blink_timer > 120:
+            self.eye_open = max(0.0, self.eye_open - 0.15)
+            if self.eye_open <= 0.0:
+                self.blink_timer = 0
+                self.eye_open = 1.0
+
+        # Update stepping legs
+        step_thresh = max(22, min(45, self.velocity * 20 + 22))
+
+        for i in range(self.num_legs):
+            self.gait_cooldown[i] += 1
+
+            if self.stepping[i]:
+                self.step_progress[i] += 0.13
+                t = min(self.step_progress[i], 1.0)
+                t_ease = t * t * (3 - 2 * t)
+                fx = self.step_from[i][0] * (1 - t_ease) + self.step_to[i][0] * t_ease
+                fy = self.step_from[i][1] * (1 - t_ease) + self.step_to[i][1] * t_ease
+                lift = math.sin(t * math.pi) * self.step_height[i]
+                self.foot_current[i][0] = fx
+                self.foot_current[i][1] = fy - lift
+
+                if t >= 1.0:
+                    self.stepping[i] = False
+                    self.foot_ground[i][0] = self.step_to[i][0]
+                    self.foot_ground[i][1] = self.step_to[i][1]
+                    self.foot_current[i][0] = self.step_to[i][0]
+                    self.foot_current[i][1] = self.step_to[i][1]
+            else:
+                dist_off = self._dist_from_home(i)
+                own_stepping = sum(
+                    1 for j in range(self.num_legs)
+                    if (j % 2 == i % 2) and self.stepping[j]
+                )
+                can_step = (
+                    dist_off > step_thresh
+                    and own_stepping < 2
+                    and self.gait_cooldown[i] > 6
+                )
+                if can_step:
+                    self.stepping[i] = True
+                    self.step_progress[i] = 0.0
+                    self.step_from[i] = [self.foot_current[i][0], self.foot_current[i][1]]
+                    tx, ty = self._ideal_foot_target(i)
+                    self.step_to[i] = [tx, ty]
+                    self.step_height[i] = 14 + self.velocity * 12
+                    self.gait_cooldown[i] = 0
+
+    def get_edges(self):
+        edges = []
+        by = self.y + self.body_bob
+
+        # --- Body: layered diamond / cross ---
+        bh = self.base_hue + self.hue_offset
+        body_color = hsv_to_hex(bh % 1.0, 0.85, 0.88)
+        body_color2 = hsv_to_hex((bh + 0.06) % 1.0, 0.9, 0.75)
+        body_color3 = hsv_to_hex((bh + 0.12) % 1.0, 0.7, 0.95)
+
+        br = self.body_radius
+        bx = self.x
+        # Outer diamond (abdomen)
+        pts = [
+            (bx,        by - br * 1.2),
+            (bx + br,   by),
+            (bx,        by + br * 0.8),
+            (bx - br,   by),
+        ]
+        for k in range(4):
+            x1, y1 = pts[k]
+            x2, y2 = pts[(k+1) % 4]
+            edges.append((x1, y1, x2, y2, body_color, 2.5))
+
+        # Inner cross
+        inner = br * 0.55
+        edges.append((bx - inner, by - inner * 0.7, bx + inner, by + inner * 0.7, body_color2, 1.5))
+        edges.append((bx + inner, by - inner * 0.7, bx - inner, by + inner * 0.7, body_color2, 1.5))
+
+        # Cephalothorax (front lobe)
+        ct_offset = -br * 0.72
+        ct_r = br * 0.52
+        ct_pts = [
+            (bx,              by + ct_offset - ct_r * 0.9),
+            (bx + ct_r * 0.8, by + ct_offset),
+            (bx,              by + ct_offset + ct_r * 0.6),
+            (bx - ct_r * 0.8, by + ct_offset),
+        ]
+        for k in range(4):
+            x1, y1 = ct_pts[k]
+            x2, y2 = ct_pts[(k+1) % 4]
+            edges.append((x1, y1, x2, y2, body_color3, 2.0))
+
+        # Eyes
+        eye_spread = ct_r * 0.35
+        ey = by + ct_offset - ct_r * 0.1
+        eye_size = 3.5 * self.eye_open
+        if eye_size > 0.5:
+            eye_color = hsv_to_hex((bh + 0.15) % 1.0, 0.5, 1.0)
+            for ex_off in [-eye_spread, eye_spread]:
+                ex = bx + ex_off
+                edges.append((ex - eye_size, ey, ex + eye_size, ey, eye_color, 1.5))
+                edges.append((ex, ey - eye_size * self.eye_open,
+                              ex, ey + eye_size * self.eye_open, eye_color, 1.5))
+
+        # --- Legs ---
+        for i in range(self.num_legs):
+            hx, hy = self._get_hip_pos(i)
+            hy += self.body_bob
+
+            fx = self.foot_current[i][0]
+            fy = self.foot_current[i][1]
+
+            kx, ky = solve_2bone_ik(
+                hx, hy, fx, fy,
+                self.seg1_len, self.seg2_len,
+                self.ik_side[i]
+            )
+
+            leg_hue = (bh + i * 0.035) % 1.0
+            sat = 0.82 + math.sin(self.phase + i) * 0.06
+            val = 0.78 + math.cos(self.phase * 0.7 + i * 0.5) * 0.08
+
+            lw_upper = max(1.5, 2.8 - i * 0.12)
+            lw_lower = max(1.0, 1.8 - i * 0.08)
+
+            seg_color = hsv_to_hex(leg_hue, sat, val)
+            tip_color = hsv_to_hex((leg_hue + 0.08) % 1.0, sat * 0.9, val * 0.85)
+
+            edges.append((hx, hy, kx, ky, seg_color, lw_upper))
+            edges.append((kx, ky, fx, fy, tip_color, lw_lower))
+
+            # Foot claw
+            claw_len = 6
+            foot_angle = math.atan2(fy - ky, fx - kx)
+            for claw_off in [-0.35, 0.35]:
+                ca = foot_angle + claw_off
+                cx2 = fx + math.cos(ca) * claw_len
+                cy2 = fy + math.sin(ca) * claw_len
+                edges.append((fx, fy, cx2, cy2, tip_color, 1.0))
+
+        return edges
+
+
+# =============================================================================
+# CREATURE 2: StickPerson — bipedal walking figure with IK + facing
+# =============================================================================
+
+class StickPerson(WanderingBody):
+    """
+    Stick figure with:
+    - Procedural walk cycle (sine-wave limb swing)
+    - Direction-aware facing (rotates with movement)
+    - 2-segment IK for legs and arms
+    - Idle sway when stationary
+    - Cool color palette (cyan → blue → purple)
+    """
+
+    def __init__(self, x, y):
+        super().__init__(x, y, speed=0.8)
+        self.hue_offset = 0.0
+        self.base_hue = 0.55   # cyan-blue
+        self.walk_phase = 0.0
+        self.facing_angle = 0.0
+        self.target_facing = 0.0
+        self.prev_x = x
+        self.prev_y = y
+        self.velocity = 0.0
+        self.is_moving = False
+
+        # Body proportions
+        self.head_radius = 12
+        self.torso_length = 42
+        self.upper_arm = 19
+        self.forearm = 17
+        self.thigh = 26
+        self.shin = 24
+
+        # Foot IK state (left, right)
+        self.foot_ground = [[x - 8, y + self.torso_length + self.thigh + self.shin],
+                            [x + 8, y + self.torso_length + self.thigh + self.shin]]
+        self.foot_current = [[x - 8, y + self.torso_length + self.thigh + self.shin],
+                             [x + 8, y + self.torso_length + self.thigh + self.shin]]
+        self.foot_stepping = [False, False]
+        self.foot_step_progress = [0.0, 0.0]
+        self.foot_step_from = [list(self.foot_ground[0]), list(self.foot_ground[1])]
+        self.foot_step_to = [list(self.foot_ground[0]), list(self.foot_ground[1])]
+        self.last_step_leg = 0
+        self.step_cooldown = 0
+
+        self.body_bob = 0.0
+        self.breath_phase = random.random() * math.pi * 2
+        self.head_verts = 10
+
+    def _rotate_point(self, px, py, cx, cy, angle):
+        dx, dy = px - cx, py - cy
+        c, s = math.cos(angle), math.sin(angle)
+        return cx + dx * c - dy * s, cy + dx * s + dy * c
+
+    def update_animation(self):
+        dx = self.x - self.prev_x
+        dy = self.y - self.prev_y
+        self.velocity = math.sqrt(dx * dx + dy * dy)
+        self.is_moving = self.velocity > 0.3
+
+        if self.is_moving:
+            self.target_facing = math.atan2(dy, dx)
+
+        # Smooth facing rotation
+        angle_diff = self.target_facing - self.facing_angle
+        while angle_diff > math.pi:  angle_diff -= 2 * math.pi
+        while angle_diff < -math.pi: angle_diff += 2 * math.pi
+        self.facing_angle += angle_diff * 0.08
+
+        self.prev_x = self.x
+        self.prev_y = self.y
+
+        # Walk phase
+        walk_speed = self.velocity * 2.5 + 0.01
+        if self.is_moving:
+            self.walk_phase += walk_speed
+        else:
+            self.walk_phase += 0.015
+
+        self.breath_phase += 0.03
+
+        bob_amp = min(self.velocity * 8, 3.0)
+        self.body_bob = math.sin(self.walk_phase * 2) * bob_amp
+
+        self.hue_offset = (self.hue_offset + 0.002) % 1.0
+
+        # Foot IK stepping
+        if self.is_moving:
+            self.step_cooldown = max(0, self.step_cooldown - 1)
+            hip_x, hip_y = self._get_hip_pos()
+
+            for foot_idx in range(2):
+                if self.foot_stepping[foot_idx]:
+                    self.foot_step_progress[foot_idx] += 0.15
+                    t = min(self.foot_step_progress[foot_idx], 1.0)
+                    t_ease = t * t * (3 - 2 * t)
+                    fx = self.foot_step_from[foot_idx][0] * (1 - t_ease) + self.foot_step_to[foot_idx][0] * t_ease
+                    fy = self.foot_step_from[foot_idx][1] * (1 - t_ease) + self.foot_step_to[foot_idx][1] * t_ease
+                    lift = math.sin(t * math.pi) * 16
+                    self.foot_current[foot_idx][0] = fx
+                    self.foot_current[foot_idx][1] = fy - lift
+                    if t >= 1.0:
+                        self.foot_stepping[foot_idx] = False
+                        self.foot_ground[foot_idx] = [fx, fy]
+                        self.foot_current[foot_idx] = [fx, fy]
+
+            # Trigger new step if foot is far from ideal
+            if self.step_cooldown == 0:
+                for foot_idx in range(2):
+                    if not self.foot_stepping[foot_idx] and not self.foot_stepping[1 - foot_idx]:
+                        ideal_x, ideal_y = self._ideal_foot(foot_idx, hip_x, hip_y)
+                        gx, gy = self.foot_ground[foot_idx]
+                        dist = math.sqrt((gx - ideal_x)**2 + (gy - ideal_y)**2)
+                        if dist > 20:
+                            self.foot_stepping[foot_idx] = True
+                            self.foot_step_progress[foot_idx] = 0.0
+                            self.foot_step_from[foot_idx] = list(self.foot_current[foot_idx])
+                            self.foot_step_to[foot_idx] = [ideal_x, ideal_y]
+                            self.step_cooldown = 3
+                            break
+        else:
+            # Drift feet back toward rest when standing still
+            hip_x, hip_y = self._get_hip_pos()
+            for foot_idx in range(2):
+                rest_x, rest_y = self._rest_foot(foot_idx, hip_x, hip_y)
+                self.foot_current[foot_idx][0] += (rest_x - self.foot_current[foot_idx][0]) * 0.04
+                self.foot_current[foot_idx][1] += (rest_y - self.foot_current[foot_idx][1]) * 0.04
+                self.foot_ground[foot_idx] = list(self.foot_current[foot_idx])
+
+    def _get_hip_pos(self):
+        return self.x, self.y + self.torso_length + self.body_bob
+
+    def _get_shoulder_pos(self):
+        return self.x, self.y + self.body_bob - 2
+
+    def _rest_foot(self, foot_idx, hip_x, hip_y):
+        side = -1 if foot_idx == 0 else 1
+        perp = self.facing_angle + math.pi / 2
+        fx = hip_x + math.cos(perp) * side * 9
+        fy = hip_y + self.thigh + self.shin - 2
+        return fx, fy
+
+    def _ideal_foot(self, foot_idx, hip_x, hip_y):
+        side = -1 if foot_idx == 0 else 1
+        perp = self.facing_angle + math.pi / 2
+        forward_offset = self.velocity * 15
+        step_x = hip_x + math.cos(self.facing_angle) * forward_offset + math.cos(perp) * side * 10
+        step_y = hip_y + self.thigh + self.shin - 2 + math.sin(self.facing_angle) * forward_offset * 0.4
+        return step_x, step_y
+
+    def _arm_swing(self, arm_idx):
+        sx, sy = self._get_shoulder_pos()
+        side = -1 if arm_idx == 0 else 1
+        perp = self.facing_angle + math.pi / 2
+
+        swing_amp = min(self.velocity * 20 + (0.08 if self.is_moving else 0.04), 0.45)
+        phase_offset = 0 if arm_idx == 0 else math.pi
+        swing_angle = math.sin(self.walk_phase + phase_offset) * swing_amp
+
+        upper_angle = math.pi / 2 + swing_angle * 0.7
+
+        shoulder_socket_x = sx + math.cos(perp) * side * 8
+        shoulder_socket_y = sy + 4
+
+        elbow_x = shoulder_socket_x + math.cos(upper_angle) * self.upper_arm * side * 0.3
+        elbow_y = shoulder_socket_y + math.sin(math.pi / 2) * self.upper_arm
+
+        forearm_angle = upper_angle + 0.25
+        hand_x = elbow_x + math.cos(forearm_angle) * self.forearm * side * 0.2
+        hand_y = elbow_y + self.forearm * 0.95
+
+        return shoulder_socket_x, shoulder_socket_y, elbow_x, elbow_y, hand_x, hand_y
+
+    def get_edges(self):
+        edges = []
+        bh = self.base_hue + self.hue_offset
+
+        head_color    = hsv_to_hex(bh % 1.0, 0.75, 0.85)
+        torso_color   = hsv_to_hex((bh + 0.05) % 1.0, 0.80, 0.80)
+        arm_color     = hsv_to_hex((bh + 0.10) % 1.0, 0.82, 0.78)
+        forearm_color = hsv_to_hex((bh + 0.13) % 1.0, 0.85, 0.72)
+        leg_color     = hsv_to_hex((bh + 0.17) % 1.0, 0.88, 0.75)
+        shin_color    = hsv_to_hex((bh + 0.22) % 1.0, 0.90, 0.68)
+
+        bx = self.x
+        by = self.y + self.body_bob
+
+        # --- Head (polygon loop) ---
+        hr = self.head_radius
+        sway = math.sin(self.breath_phase) * (0.06 if not self.is_moving else 0.03)
+        head_cx = bx + math.cos(self.facing_angle) * 2
+        head_cy = by - 4
+
+        n = self.head_verts
+        head_pts = []
+        for k in range(n):
+            a = 2 * math.pi * k / n + sway
+            hpx = head_cx + math.cos(a) * hr
+            hpy = head_cy + math.sin(a) * hr * 0.95
+            head_pts.append((hpx, hpy))
+
+        for k in range(n):
+            x1, y1 = head_pts[k]
+            x2, y2 = head_pts[(k + 1) % n]
+            edges.append((x1, y1, x2, y2, head_color, 2.2))
+
+        # Eyes
+        eye_offset_fwd = math.cos(self.facing_angle) * 4
+        eye_offset_up = -hr * 0.18
+        eye_len = 3.5
+        eye_color = hsv_to_hex((bh + 0.35) % 1.0, 0.5, 1.0)
+        perp = self.facing_angle + math.pi / 2
+        for eye_side in [-1, 1]:
+            ex = head_cx + eye_offset_fwd + math.cos(perp) * eye_side * 4.5
+            ey = head_cy + eye_offset_up
+            edges.append((ex - eye_len, ey, ex + eye_len, ey, eye_color, 1.5))
+
+        # --- Torso ---
+        torso_top_x = bx
+        torso_top_y = by
+        hip_x, hip_y = self._get_hip_pos()
+
+        lean = math.cos(self.facing_angle) * self.velocity * 6
+        torso_bot_x = bx + lean * 0.3
+        torso_bot_y = hip_y
+
+        edges.append((torso_top_x, torso_top_y, torso_bot_x, torso_bot_y, torso_color, 2.8))
+
+        # --- Arms ---
+        for arm_idx in range(2):
+            sx2, sy2, ex2, ey2, hx2, hy2 = self._arm_swing(arm_idx)
+            edges.append((sx2, sy2, ex2, ey2, arm_color, 2.2))
+            edges.append((ex2, ey2, hx2, hy2, forearm_color, 1.7))
+            hand_sz = 2.5
+            edges.append((hx2 - hand_sz, hy2, hx2 + hand_sz, hy2, forearm_color, 1.0))
+
+        # --- Legs (IK) ---
+        for leg_idx in range(2):
+            fx = self.foot_current[leg_idx][0]
+            fy = self.foot_current[leg_idx][1]
+
+            side = -1 if leg_idx == 0 else 1
+            kx, ky = solve_2bone_ik(
+                hip_x, hip_y, fx, fy,
+                self.thigh, self.shin,
+                side
+            )
+
+            edges.append((hip_x, hip_y, kx, ky, leg_color, 2.5))
+            edges.append((kx, ky, fx, fy, shin_color, 2.0))
+
+            # Foot
+            foot_dir = math.cos(self.facing_angle)
+            foot_len = 8
+            foot_x_start = fx - foot_len * 0.3
+            foot_x_end = fx + foot_len * 0.7 * (1 if foot_dir >= 0 else -1)
+            edges.append((foot_x_start, fy, foot_x_end, fy, shin_color, 2.0))
+
+        return edges
+
+
+# =============================================================================
+# CREATURE 3: CentipedeCreature — Chain Spine with Legs
+# =============================================================================
+
+class CentipedeCreature(WanderingBody):
+    def __init__(self, x, y):
+        super().__init__(x, y, speed=1.0)
+        self.num_segments = 18
+        self.seg_distance = 16
+        self.segments = [[x - i * self.seg_distance, y] for i in range(self.num_segments)]
+        self.hue_offset = 0.0
+        self.anim_time = 0.0
+        self.base_hue = 0.35  # green
+        self.leg_length_1 = 10
+        self.leg_length_2 = 10
+        self.antenna_length = 20
+
+    def update_animation(self):
+        # Head follows WanderingBody position
+        self.segments[0][0] = self.x
+        self.segments[0][1] = self.y
+
+        # Chain physics
+        for i in range(1, self.num_segments):
+            dx = self.segments[i - 1][0] - self.segments[i][0]
+            dy = self.segments[i - 1][1] - self.segments[i][1]
+            dist = math.sqrt(dx * dx + dy * dy) + 0.001
+            if dist != self.seg_distance:
+                ratio = self.seg_distance / dist
+                self.segments[i][0] = self.segments[i - 1][0] - dx * ratio
+                self.segments[i][1] = self.segments[i - 1][1] - dy * ratio
+
+        # Secondary sinusoidal body undulation
+        for i in range(1, self.num_segments):
+            dx = self.segments[i][0] - self.segments[i - 1][0]
+            dy = self.segments[i][1] - self.segments[i - 1][1]
+            dist = math.sqrt(dx * dx + dy * dy) + 0.001
+            perp_x = -dy / dist
+            perp_y = dx / dist
+            offset = math.sin(self.anim_time * 2.0 + i * 0.3) * 3.0
+            self.segments[i][0] += perp_x * offset
+            self.segments[i][1] += perp_y * offset
+
+        self.anim_time += 0.04
+        self.hue_offset += 0.003
+
+    def get_edges(self):
+        edges = []
+        n = self.num_segments
+
+        # --- Antennae at head ---
+        if n >= 2:
+            head_x, head_y = self.segments[0]
+            s1_x, s1_y = self.segments[1]
+            fwd_dx = head_x - s1_x
+            fwd_dy = head_y - s1_y
+            fwd_dist = math.sqrt(fwd_dx * fwd_dx + fwd_dy * fwd_dy) + 0.001
+            fwd_nx = fwd_dx / fwd_dist
+            fwd_ny = fwd_dy / fwd_dist
+
+            sway = math.sin(self.anim_time * 3.5) * 0.4
+
+            ant_hue = (self.base_hue + self.hue_offset) % 1.0
+            ant_color = hsv_to_hex(ant_hue, 0.7, 0.95)
+
+            # Left antenna
+            left_angle = math.atan2(fwd_ny, fwd_nx) + 0.45 + sway
+            la_ex = head_x + self.antenna_length * math.cos(left_angle)
+            la_ey = head_y + self.antenna_length * math.sin(left_angle)
+            edges.append((head_x, head_y, la_ex, la_ey, ant_color, 1.5))
+
+            # Right antenna
+            right_angle = math.atan2(fwd_ny, fwd_nx) - 0.45 + sway
+            ra_ex = head_x + self.antenna_length * math.cos(right_angle)
+            ra_ey = head_y + self.antenna_length * math.sin(right_angle)
+            edges.append((head_x, head_y, ra_ex, ra_ey, ant_color, 1.5))
+
+            # Antenna tips — small fork at end
+            fork_len = 6
+            for base_angle, tip_x, tip_y in [
+                (left_angle, la_ex, la_ey),
+                (right_angle, ra_ex, ra_ey),
+            ]:
+                for fork_offset in (-0.3, 0.3):
+                    fa = base_angle + fork_offset
+                    fx = tip_x + fork_len * math.cos(fa)
+                    fy = tip_y + fork_len * math.sin(fa)
+                    edges.append((tip_x, tip_y, fx, fy, ant_color, 1.0))
+
+        # --- Spine segments ---
+        for i in range(1, n):
+            x1, y1 = self.segments[i - 1]
+            x2, y2 = self.segments[i]
+
+            t = i / (n - 1)
+            hue = (self.base_hue + t * 0.2 + self.hue_offset) % 1.0
+            sat = 0.85
+            val = 0.85 - t * 0.2
+
+            color = hsv_to_hex(hue, sat, val)
+            lw = max(1.0, 3.0 - t * 2.0)
+
+            edges.append((x1, y1, x2, y2, color, lw))
+
+        # --- Legs (segments 2 through n-3) ---
+        for i in range(2, n - 2):
+            seg_x, seg_y = self.segments[i]
+
+            prev_x, prev_y = self.segments[i - 1]
+            spine_dx = seg_x - prev_x
+            spine_dy = seg_y - prev_y
+            spine_angle = math.atan2(spine_dy, spine_dx)
+            perp_angle = spine_angle + math.pi / 2.0
+
+            wave = math.sin(self.anim_time * 3.0 + i * 0.4)
+
+            t = i / (n - 1)
+            leg_hue = (self.base_hue + t * 0.2 + self.hue_offset + 0.04) % 1.0
+            leg_color = hsv_to_hex(leg_hue, 0.92, 0.75 - t * 0.1)
+
+            swing = wave * 0.4
+
+            for side, sign in [("left", 1), ("right", -1)]:
+                leg_angle = perp_angle + sign * swing
+                hip_x = seg_x + self.leg_length_1 * math.cos(leg_angle)
+                hip_y = seg_y + self.leg_length_1 * math.sin(leg_angle)
+
+                foot_angle = leg_angle + sign * 0.3
+                foot_x = hip_x + self.leg_length_2 * math.cos(foot_angle)
+                foot_y = hip_y + self.leg_length_2 * math.sin(foot_angle)
+
+                edges.append((seg_x, seg_y, hip_x, hip_y, leg_color, 1.5))
+                edges.append((hip_x, hip_y, foot_x, foot_y, leg_color, 1.0))
+
+                # Tiny claw
+                claw_len = 4
+                for claw_off in (-0.25, 0.25):
+                    ca = foot_angle + claw_off
+                    cx = foot_x + claw_len * math.cos(ca)
+                    cy = foot_y + claw_len * math.sin(ca)
+                    edges.append((foot_x, foot_y, cx, cy, leg_color, 0.8))
+
+        return edges
+
+
+# =============================================================================
+# CREATURES VISUALIZATION (wraps all 3 creatures as one viz)
+# =============================================================================
+
+class CreaturesViz:
+    """Three walking creatures that follow the cursor."""
+    name = "Walking Creatures"
+    num_lines = 800
+
+    def __init__(self):
+        self.cursor = CursorTracker()
+        self.creatures = [
+            CentipedeCreature(450, 450),
+            SpiderCreature(300, 400),
+            StickPerson(600, 350),
+        ]
+
+    def on_motion(self, event):
+        self.cursor.on_motion(event)
+
+    def resize(self, w, h):
+        for c in self.creatures:
+            c.resize(w, h)
+
+    def update(self):
+        self.cursor.update()
+        for creature in self.creatures:
+            creature.update_position(self.cursor)
+            if hasattr(creature, 'update_animation'):
+                creature.update_animation()
+
+        # Inter-creature repulsion — prevent overlap
+        repel_threshold = 150
+        repel_strength = 0.04
+        n = len(self.creatures)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = self.creatures[i], self.creatures[j]
+                dx = a.x - b.x
+                dy = a.y - b.y
+                dist = math.sqrt(dx * dx + dy * dy) + 0.001
+                if dist < repel_threshold:
+                    force = (repel_threshold - dist) * repel_strength
+                    nx, ny = dx / dist, dy / dist
+                    a.x += nx * force
+                    a.y += ny * force
+                    b.x -= nx * force
+                    b.y -= ny * force
+
+    def get_edges(self, width, height):
+        edges = []
+        for creature in self.creatures:
+            edges.extend(creature.get_edges())
+        return edges
+
+
+# =============================================================================
+# SCREENSAVER (MAIN)
+# =============================================================================
+
+class Screensaver:
+    VISUALIZATIONS = [
+        Tesseract, SacredMandala, SpiralingIcosahedron, LotusMandala,
+        RotatingDodecahedron, SriYantra, Merkaba, Cell24,
+        KaleidoscopeMandala, StellatedDodecahedron, HarmonicRose,
+        Hyperdodecahedron, CosmicWeb, UzumakiSpiral3D,
+        FourierEpicycles, GeodesicSphere, BouncingParticles, TunnelFlight,
+        HilbertCurve, CreaturesViz,
+    ]
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Hilbert + Creatures Screensaver")
+        self.root.configure(bg=CONFIG['bg_color'])
+
+        self.width, self.height = 900, 700
+        self.root.geometry(f'{self.width}x{self.height}')
+        self.root.minsize(400, 300)
+
+        # Clock bar
+        self.clock_frame = tk.Frame(self.root, bg='#000000', height=CONFIG['clock_height'])
+        self.clock_frame.pack(fill=tk.X, side=tk.TOP)
+        self.clock_frame.pack_propagate(False)
+        self.clock_label = tk.Label(self.clock_frame, text="",
+                                     font=('Arial', CONFIG['clock_font_size'], 'bold'),
+                                     fg='#ffffff', bg='#000000')
+        self.clock_label.pack(expand=True)
+        self.name_label = tk.Label(self.clock_frame, text="",
+                                    font=('Arial', 14), fg='#666666', bg='#000000')
+        self.name_label.place(relx=0.98, rely=0.5, anchor='e')
+
+        # Canvas
+        self.canvas = tk.Canvas(self.root, bg=CONFIG['bg_color'], highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Stars (always visible)
+        self.stars = StarField(self.width, self.height)
+
+        # Current visualization
+        self.current_viz = None
+        self._switch_visualization()
+
+        # Forward mouse motion to viz if it supports it
+        self.canvas.bind('<Motion>', self._on_motion)
+
+        # Pre-allocate canvas items (line pool)
+        self.star_items = [self.canvas.create_oval(0, 0, 1, 1, fill='', outline='')
+                           for _ in range(CONFIG['num_stars'])]
+        self.line_items = [self.canvas.create_line(0, 0, 0, 0, fill='', width=1)
+                           for _ in range(CONFIG['max_lines'])]
+        self.line_index = 0
+
+        # Bindings
+        self.root.bind('<Escape>', lambda e: self.quit())
+        self.root.bind('<space>', lambda e: self._switch_visualization())
+        self.root.bind('<Configure>', self._on_resize)
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
+
+        self.frame_time = 1000 // CONFIG['fps']
+        self.running = True
+
+        self.root.after(CONFIG['switch_interval'], self._auto_switch)
+
+    def _switch_visualization(self):
+        choices = [v for v in self.VISUALIZATIONS if not isinstance(self.current_viz, v)]
+        VizClass = random.choice(choices) if choices else random.choice(self.VISUALIZATIONS)
+        self.current_viz = VizClass()
+        if hasattr(self.current_viz, 'resize'):
+            self.current_viz.resize(self.width, self.height)
+        self.name_label.config(text=self.current_viz.name)
+        self.root.title(f"Screensaver - {self.current_viz.name}")
+
+    def _auto_switch(self):
+        if self.running:
+            self._switch_visualization()
+            self.root.after(CONFIG['switch_interval'], self._auto_switch)
+
+    def _on_motion(self, event):
+        if hasattr(self.current_viz, 'on_motion'):
+            self.current_viz.on_motion(event)
+
+    def _on_resize(self, event):
+        if event.widget == self.canvas:
+            self.width, self.height = event.width, event.height
+            self.stars.resize(self.width, self.height)
+            if hasattr(self.current_viz, 'resize'):
+                self.current_viz.resize(self.width, self.height)
+
+    def quit(self):
+        self.running = False
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+    def draw(self):
+        try:
+            self.clock_label.config(text=datetime.now().strftime('%H:%M:%S'))
+            self.line_index = 0
+
+            # Draw stars
+            s = CONFIG['star_size']
+            for i, (x, y, color) in enumerate(self.stars.get_stars()):
+                if i < len(self.star_items):
+                    self.canvas.coords(self.star_items[i], x - s, y - s, x + s, y + s)
+                    self.canvas.itemconfig(self.star_items[i], fill=color)
+
+            # Draw current visualization
+            if self.current_viz:
+                for edge in self.current_viz.get_edges(self.width, self.height):
+                    self._draw_line(edge)
+
+            # Hide unused lines
+            for i in range(self.line_index, len(self.line_items)):
+                self.canvas.coords(self.line_items[i], 0, 0, 0, 0)
+        except Exception:
+            pass
+
+    def _draw_line(self, edge):
+        if self.line_index < len(self.line_items):
+            x1, y1, x2, y2, color, lw = edge
+            item = self.line_items[self.line_index]
+            self.canvas.coords(item, x1, y1, x2, y2)
+            self.canvas.itemconfig(item, fill=color, width=lw)
+            self.line_index += 1
+
+    def run(self):
+        def frame():
+            if not self.running:
+                return
+            try:
+                self.stars.update()
+                if self.current_viz:
+                    self.current_viz.update()
+                self.draw()
+            except Exception:
+                pass
+            self.root.after(self.frame_time, frame)
+
+        frame()
+        try:
+            self.root.mainloop()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    try:
+        Screensaver().run()
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Error: {e}")
