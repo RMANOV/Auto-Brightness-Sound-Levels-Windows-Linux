@@ -42,39 +42,39 @@ class SunTests(unittest.TestCase):
             'sunrise': dt.time(0, 15), 'sunset': dt.time(12, 30), 'solar_noon': dt.time(6, 30)
         }) as solar:
             self.assertEqual(calc.get_activation_windows(date), {
-                'sunrise_start': dt.time(23, 45), 'sunrise_end': dt.time(2, 15),
-                'sunset_start': dt.time(12), 'sunset_end': dt.time(14, 30),
+                'sunrise_start': dt.time(22, 45), 'sunrise_end': dt.time(6, 15),
+                'sunset_start': dt.time(11), 'sunset_end': dt.time(18, 30),
             })
             solar.assert_called_once_with(date)
 
     def test_midnight_sunrise_inclusive_red(self):
         calc = self.calculator(dt.time(0, 15), dt.time(12, 30))
-        for value in [dt.time(23, 45), dt.time(23, 59), dt.time(0), dt.time(2, 15)]:
+        for value in [dt.time(22, 45), dt.time(23, 59), dt.time(0), dt.time(6, 15)]:
             with self.subTest(value=value):
                 self.assertEqual(calc.is_in_active_window(value), (True, 'sunrise'))
 
     def test_midnight_sunrise_outside_control(self):
         calc = self.calculator(dt.time(0, 15), dt.time(12, 30))
-        for value in [dt.time(23, 44, 59), dt.time(2, 15, 1)]:
+        for value in [dt.time(22, 44, 59), dt.time(6, 15, 1)]:
             self.assertEqual(calc.is_in_active_window(value), (False, None))
 
     def test_existing_sunset_and_day_bounds_control(self):
         calc = self.calculator(dt.time(7), dt.time(19))
-        for value, expected in [(dt.time(6, 29, 59), (False, None)),
-                                (dt.time(6, 30), (True, 'sunrise')),
-                                (dt.time(9), (True, 'sunrise')),
-                                (dt.time(9, 0, 1), (False, None)),
-                                (dt.time(18, 30), (True, 'sunset')),
-                                (dt.time(21), (True, 'sunset')),
-                                (dt.time(21, 0, 1), (False, None))]:
+        for value, expected in [(dt.time(5, 29, 59), (False, None)),
+                                (dt.time(5, 30), (True, 'sunrise')),
+                                (dt.time(13), (True, 'sunrise')),
+                                (dt.time(13, 0, 1), (False, None)),
+                                (dt.time(17, 30), (True, 'sunset')),
+                                (dt.time(1), (True, 'sunset')),
+                                (dt.time(1, 0, 1), (False, None))]:
             with self.subTest(value=value):
                 self.assertEqual(calc.is_in_active_window(value), expected)
-        calc = self.calculator(dt.time(7), dt.time(23, 30))
-        for value, expected in [(dt.time(22, 59, 59), (False, None)),
-                                (dt.time(23), (True, 'sunset')),
+        calc = self.calculator(dt.time(8), dt.time(23, 30))
+        for value, expected in [(dt.time(21, 59, 59), (False, None)),
+                                (dt.time(22), (True, 'sunset')),
                                 (dt.time(0), (True, 'sunset')),
-                                (dt.time(1, 30), (True, 'sunset')),
-                                (dt.time(1, 30, 1), (False, None))]:
+                                (dt.time(5, 30), (True, 'sunset')),
+                                (dt.time(5, 30, 1), (False, None))]:
             with self.subTest(value=value):
                 self.assertEqual(calc.is_in_active_window(value), expected)
 
