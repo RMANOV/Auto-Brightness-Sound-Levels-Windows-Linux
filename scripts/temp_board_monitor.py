@@ -224,6 +224,7 @@ def configure_serial(fd: int, baud: int) -> None:
     attrs[2] &= ~termios.PARENB
     attrs[2] &= ~termios.CSIZE
     attrs[2] &= ~termios.HUPCL
+    attrs[2] &= ~getattr(termios, "CRTSCTS", 0)
     attrs[2] |= termios.CS8
     attrs[6][termios.VMIN] = 0
     attrs[6][termios.VTIME] = 0
@@ -250,18 +251,31 @@ def write_serial_fd(fd: int, payload: str) -> int:
     return written
 
 
+def _close_owned_fd(fd: int, primary_failed: bool) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        if not primary_failed:
+            raise
+
+
 def write_serial_once(path: str, baud: int, payload: str, open_delay: float) -> int:
     fd = open_serial(path, baud)
+    primary_failed = False
     try:
         if open_delay > 0:
             time.sleep(open_delay)
         return write_serial_fd(fd, payload)
+    except BaseException:
+        primary_failed = True
+        raise
     finally:
-        os.close(fd)
+        _close_owned_fd(fd, primary_failed)
 
 
 def read_serial_once(path: str, baud: int, timeout: float = 2.0) -> str | None:
     fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    primary_failed = False
     try:
         configure_serial(fd, baud)
         deadline = time.monotonic() + timeout
@@ -278,8 +292,11 @@ def read_serial_once(path: str, baud: int, timeout: float = 2.0) -> str | None:
                 break
         text = data.decode("utf-8", errors="replace").strip()
         return text or None
+    except BaseException:
+        primary_failed = True
+        raise
     finally:
-        os.close(fd)
+        _close_owned_fd(fd, primary_failed)
 
 
 def parse_board_temperature(line: str | None) -> float | None:
@@ -552,6 +569,7 @@ def monitor(args: argparse.Namespace) -> int:
     serial_real_path: str | None = None
     try:
         while True:
+            iteration_status = 1
             temps = read_host_temperatures()
             candidates = discover_serial_candidates()
             display_temp = select_display_temperature(temps)
@@ -594,6 +612,7 @@ def monitor(args: argparse.Namespace) -> int:
                         print(f"board temp: no numeric reading yet from {candidate.path}")
                     else:
                         print(f"board temp [{candidate.path}]: {value:.1f} C")
+                        iteration_status = 0
             else:
                 payload = format_payload(display_temp, args)
                 try:
@@ -632,11 +651,12 @@ def monitor(args: argparse.Namespace) -> int:
                     print(f"serial send: {exc}")
                     return 2
                 else:
+                    iteration_status = 0
                     if not args.quiet:
                         print(f"serial send [{candidate.path}]: wrote {written} bytes {payload!r}")
 
             if args.once:
-                return 0
+                return 0 if args.dry_run else iteration_status
             print("")
             time.sleep(args.interval)
     finally:
