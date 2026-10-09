@@ -36,3 +36,6 @@ mod command_result_tests {
         assert_eq!(checked_percent(true, "0", "volume").unwrap(), 0);
     }
 }
+
+#[cfg(any(target_os = "windows", test))]
+pub(crate) mod helper_cache;
