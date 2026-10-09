@@ -86,8 +86,20 @@ fn parse_volume(method: Method, text: &str) -> Result<i32> {
                 * 100.0
         }
     };
+    // PulseAudio permits amplification above PA_VOLUME_NORM; wpctl likewise
+    // permits values above 1.0. Keep the readback rather than choosing ALSA.
+    let max = match method {
+        Method::Amixer => 100.0,
+        // PA_VOLUME_MAX = UINT32_MAX / 2; PA_VOLUME_NORM = 65536.
+        // Displayed percentages are rounded, so compare against rounded max.
+        Method::Pactl => ((u32::MAX / 2) as f64 * 100.0 / 65536.0).round(),
+        Method::Wpctl => i32::MAX as f64,
+    };
     anyhow::ensure!(
-        value.is_finite() && (0.0..=100.0).contains(&value),
+        value.is_finite()
+            && value >= 0.0
+            && value.round() <= max
+            && (method != Method::Amixer || value <= 100.0),
         "Invalid volume range"
     );
     Ok(value.round() as i32)
@@ -139,6 +151,50 @@ mod tests {
         assert!(select_method(|_| anyhow::bail!("no control")).is_err());
     }
     #[test]
+    fn amplified_session_readbacks_keep_the_active_backend() {
+        assert_eq!(parse_volume(Method::Wpctl, "Volume: 1.25").unwrap(), 125);
+        let mut calls = Vec::new();
+        let selected = select_method(|m| {
+            calls.push(m);
+            match m {
+                Method::Pactl => parse_volume(m, "Volume: front-left: 81920 / 125% / 5.8 dB"),
+                _ => Ok(50),
+            }
+        })
+        .unwrap();
+        assert_eq!(selected, Method::Pactl);
+        assert_eq!(calls, [Method::Pactl]);
+    }
+    #[test]
+    fn amplified_wpctl_does_not_fall_back_and_invalid_amplification_is_refused() {
+        let mut calls = Vec::new();
+        let selected = select_method(|m| {
+            calls.push(m);
+            match m {
+                Method::Pactl => anyhow::bail!("no pulse"),
+                Method::Wpctl => parse_volume(m, "Volume: 1.5"),
+                Method::Amixer => Ok(50),
+            }
+        })
+        .unwrap();
+        assert_eq!(selected, Method::Wpctl);
+        assert_eq!(calls, [Method::Pactl, Method::Wpctl]);
+        assert_eq!(parse_volume(Method::Wpctl, "Volume: 1.5").unwrap(), 150);
+        assert!(parse_volume(Method::Amixer, "[125%]").is_err());
+        for text in [
+            "Volume: NaN%",
+            "Volume: inf%",
+            "Volume: -1%",
+            "Volume: 3276801%",
+        ] {
+            assert!(parse_volume(Method::Pactl, text).is_err());
+        }
+        assert_eq!(
+            parse_volume(Method::Pactl, "Volume: 3276800%").unwrap(),
+            3276800
+        );
+    }
+    #[test]
     fn actual_linux_formats_and_zero_parse() {
         assert_eq!(
             parse_volume(Method::Amixer, "Mono: Playback 0 [0%] [-inf dB] [on]").unwrap(),
@@ -160,7 +216,7 @@ mod tests {
             "Volume: NaN",
             "Volume: inf",
             "Volume: -0.1",
-            "Volume: 1.5",
+            "Volume: 21474836.48",
         ] {
             assert!(parse_volume(Method::Wpctl, input).is_err());
         }

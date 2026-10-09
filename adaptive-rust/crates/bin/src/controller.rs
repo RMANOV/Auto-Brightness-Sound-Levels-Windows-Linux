@@ -102,6 +102,8 @@ pub struct Controller {
     last_target_brightness: Option<f32>,
     last_target_volume: Option<f32>,
     converge_count: u32,
+    pending_brightness_sample: bool,
+    pending_audio_sample: bool,
 
     // Sun-aware seasonal adaptation
     sun_window: Option<SunWindow>,
@@ -180,6 +182,8 @@ impl Controller {
             last_target_brightness: None,
             last_target_volume: None,
             converge_count: 0,
+            pending_brightness_sample: false,
+            pending_audio_sample: false,
             sun_window,
         })
     }
@@ -194,8 +198,6 @@ impl Controller {
         }
         self.last_update = now;
 
-        let prev_target_v = self.last_target_volume;
-
         let fresh_brightness = self.process_brightness()?;
         let fresh_audio = self.process_audio()?;
         let brightness_available = self.brightness_control.is_available();
@@ -204,22 +206,25 @@ impl Controller {
         }
 
         // Auto-exit convergence check (after warmup)
-        if self.config.auto_exit && self.warmup_frame >= self.config.warmup_frames {
+        if self.config.auto_exit
+            && self.warmup_frame >= self.config.warmup_frames
+            && consume_convergence_sample(
+                &mut self.pending_brightness_sample,
+                &mut self.pending_audio_sample,
+                brightness_available,
+                fresh_brightness,
+                fresh_audio,
+            )
+        {
             let b_ok = if let Some(reading) = self.brightness_control.get_readback()? {
                 self.current_brightness = reading.percent as f32;
-                confirmed_brightness_stable(fresh_brightness, reading, self.last_target_brightness)
+                confirmed_brightness_stable(true, reading, self.last_target_brightness)
             } else {
                 true // explicitly unavailable, never a measured/applied brightness
             };
-            let v_ok = if brightness_available {
-                prev_target_v.map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0)
-            } else {
-                self.current_volume = self.volume_control.get()? as f32;
-                volume_only_stable(fresh_audio, self.current_volume, self.last_target_volume)
-            };
-            let fresh =
-                convergence_sample_ready(brightness_available, fresh_brightness, fresh_audio);
-            self.converge_count = advance_convergence_count(self.converge_count, fresh, b_ok, v_ok);
+            self.current_volume = self.volume_control.get()? as f32;
+            let v_ok = confirmed_volume_stable(true, self.current_volume, self.last_target_volume);
+            self.converge_count = advance_convergence_count(self.converge_count, true, b_ok, v_ok);
             if self.converge_count >= 3 {
                 let elapsed = self.start_time.elapsed().as_secs_f32();
                 let window_info = self
@@ -309,14 +314,7 @@ impl Controller {
     }
 
     fn process_audio(&mut self) -> Result<bool> {
-        let mut latest: Option<AudioData> = None;
-        loop {
-            match self.audio_rx.try_recv() {
-                Ok(data) => latest = Some(data),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
-            }
-        }
+        let latest = latest_audio(&self.audio_rx)?;
 
         let fresh = latest.is_some();
         if let Some(audio_data) = latest {
@@ -545,6 +543,30 @@ fn latest_brightness(rx: &Receiver<FrameData>) -> Result<Option<FrameData>> {
     Ok(latest)
 }
 
+fn latest_audio(rx: &Receiver<AudioData>) -> Result<Option<AudioData>> {
+    let mut latest: Option<AudioData> = None;
+    loop {
+        match rx.try_recv() {
+            Ok(data) => latest = Some(data),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => {
+                if latest.is_none() {
+                    anyhow::bail!("Required audio channel disconnected");
+                }
+                break;
+            }
+        }
+    }
+
+    if let Some(data) = &latest {
+        anyhow::ensure!(
+            data.noise_level.is_finite() && data.noise_level >= 0.0,
+            "Invalid audio measurement"
+        );
+    }
+    Ok(latest)
+}
+
 fn advance_convergence_count(count: u32, fresh: bool, brightness_ok: bool, volume_ok: bool) -> u32 {
     if !fresh {
         return count;
@@ -570,13 +592,32 @@ fn convergence_sample_ready(
     fresh_audio: bool,
 ) -> bool {
     if brightness_available {
-        fresh_brightness
+        fresh_brightness && fresh_audio
     } else {
         fresh_audio
     }
 }
 
-fn volume_only_stable(fresh: bool, actual: f32, target: Option<f32>) -> bool {
+// Consume independent sample cadences exactly once per stability step.
+// Neither stream can keep advancing convergence on one stale-ever sample.
+fn consume_convergence_sample(
+    pending_brightness: &mut bool,
+    pending_audio: &mut bool,
+    brightness_available: bool,
+    fresh_brightness: bool,
+    fresh_audio: bool,
+) -> bool {
+    *pending_brightness |= fresh_brightness;
+    *pending_audio |= fresh_audio;
+    if !convergence_sample_ready(brightness_available, *pending_brightness, *pending_audio) {
+        return false;
+    }
+    *pending_brightness = false;
+    *pending_audio = false;
+    true
+}
+
+fn confirmed_volume_stable(fresh: bool, actual: f32, target: Option<f32>) -> bool {
     fresh
         && actual.is_finite()
         && (0.0..=100.0).contains(&actual)
@@ -614,6 +655,84 @@ mod restoration_tests {
         BrightnessReadback {
             percent: percent as f64,
             step_percent: 1.0,
+        }
+    }
+    #[test]
+    fn supported_brightness_cannot_count_without_audio_evidence() {
+        assert!(!convergence_sample_ready(true, true, false));
+    }
+    #[test]
+    fn required_audio_disconnect_is_an_error_after_queued_sample() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert!(latest_audio(&rx).unwrap().is_none());
+        tx.send(AudioData { noise_level: 0.001 }).unwrap();
+        drop(tx);
+        assert_eq!(latest_audio(&rx).unwrap().unwrap().noise_level, 0.001);
+        assert!(latest_audio(&rx).is_err());
+    }
+    #[test]
+    fn independent_camera_audio_cadences_require_new_evidence_each_step() {
+        let (mut camera, mut audio) = (false, false);
+        let mut count = 0;
+        // Disjoint polls, including the Windows 2s camera / 5s audio phases.
+        for (c, a) in [
+            (true, false),
+            (false, true),
+            (true, false),
+            (false, false),
+            (false, true),
+            (false, true),
+            (true, false),
+        ] {
+            let ready = consume_convergence_sample(&mut camera, &mut audio, true, c, a);
+            count = advance_convergence_count(
+                count,
+                ready,
+                true,
+                confirmed_volume_stable(ready, 25.0, Some(25.0)),
+            );
+        }
+        assert_eq!(count, 3);
+        for _ in 0..20 {
+            assert!(!consume_convergence_sample(
+                &mut camera,
+                &mut audio,
+                true,
+                true,
+                false
+            ));
+        }
+        assert!(consume_convergence_sample(
+            &mut camera,
+            &mut audio,
+            true,
+            false,
+            true
+        ));
+        assert_eq!(
+            advance_convergence_count(
+                2,
+                true,
+                true,
+                confirmed_volume_stable(true, 50.0, Some(25.0))
+            ),
+            0
+        );
+        assert!(!consume_convergence_sample(
+            &mut camera,
+            &mut audio,
+            true,
+            false,
+            true
+        ));
+        assert!(!confirmed_volume_stable(true, 25.0, None));
+    }
+    #[test]
+    fn invalid_audio_measurement_is_not_a_target() {
+        for noise_level in [f32::NAN, f32::INFINITY, -0.001] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            tx.send(AudioData { noise_level }).unwrap();
+            assert!(latest_audio(&rx).is_err());
         }
     }
     #[test]
@@ -658,18 +777,18 @@ mod restoration_tests {
         let mut count = 0;
         for fresh_audio in [true, false, false, true, false, true] {
             let fresh = convergence_sample_ready(false, true, fresh_audio);
-            let stable = volume_only_stable(fresh_audio, 25.0, Some(25.4));
+            let stable = confirmed_volume_stable(fresh_audio, 25.0, Some(25.4));
             count = advance_convergence_count(count, fresh, true, stable);
         }
         assert_eq!(count, 3);
         assert!(!convergence_sample_ready(false, true, false));
-        assert!(!volume_only_stable(true, 50.0, None));
-        assert!(!volume_only_stable(false, 25.0, Some(25.0)));
-        assert!(!volume_only_stable(true, 50.0, Some(25.0)));
-        assert!(!volume_only_stable(true, f32::NAN, Some(25.0)));
-        assert!(!volume_only_stable(true, 25.0, Some(f32::NAN)));
+        assert!(!confirmed_volume_stable(true, 50.0, None));
+        assert!(!confirmed_volume_stable(false, 25.0, Some(25.0)));
+        assert!(!confirmed_volume_stable(true, 50.0, Some(25.0)));
+        assert!(!confirmed_volume_stable(true, f32::NAN, Some(25.0)));
+        assert!(!confirmed_volume_stable(true, 25.0, Some(f32::NAN)));
         assert_eq!(advance_convergence_count(2, true, true, false), 0);
-        assert!(convergence_sample_ready(true, true, false));
+        assert!(!convergence_sample_ready(true, true, false));
         assert!(!convergence_sample_ready(true, false, true));
     }
     #[test]

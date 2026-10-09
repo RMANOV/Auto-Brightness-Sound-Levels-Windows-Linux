@@ -4,9 +4,12 @@
 //! The helper is compiled once from embedded source using csc.exe,
 //! then reused for fast (<50ms) volume get/set operations.
 
-use crate::system::checked_percent;
+use crate::system::{
+    checked_percent,
+    helper_cache::{atomic_publish, ensure_helper},
+};
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info};
 
@@ -82,6 +85,11 @@ class VolumeHelper {
             Console.Error.WriteLine("Usage: volume_helper.exe get | set <0-100>");
             return 1;
         }
+        // This validates the cached executable independently of endpoint availability.
+        if (args[0] == "self-test") {
+            Console.WriteLine("adaptive-volume-checked-v3");
+            return 0;
+        }
         try {
             if (args[0] == "get") {
                 float level;
@@ -114,38 +122,11 @@ impl VolumeControl {
         let app_dir = get_app_data_dir()?;
         std::fs::create_dir_all(&app_dir)?;
 
-        // Versioned filename avoids reusing the legacy helper that ignored HRESULTs.
-        let cs_path = app_dir.join("volume_helper_checked_v2.cs");
-        let exe_path = app_dir.join("volume_helper_checked_v2.exe");
-
-        // Compile helper if missing or source changed
-        if !exe_path.exists() {
-            info!("Compiling volume helper (one-time)...");
-            std::fs::write(&cs_path, VOLUME_HELPER_CS)?;
-
-            let csc = find_csc()?;
-            let status = Command::new(&csc)
-                .args([
-                    &format!("/out:{}", exe_path.display()),
-                    "/target:exe",
-                    "/optimize+",
-                    "/nologo",
-                    &cs_path.display().to_string(),
-                ])
-                .output()
-                .with_context(|| format!("Failed to run csc.exe at {:?}", csc))?;
-
-            if !status.status.success() {
-                let stderr = String::from_utf8_lossy(&status.stderr);
-                let stdout = String::from_utf8_lossy(&status.stdout);
-                anyhow::bail!(
-                    "C# compilation failed:\nstdout: {}\nstderr: {}",
-                    stdout.trim(),
-                    stderr.trim()
-                );
-            }
-            info!("Volume helper compiled: {}", exe_path.display());
-        }
+        // The v3 self-test distinguishes corrupt code from unavailable audio.
+        // A working v2 cache remains untouched; v3 is compiled beside the final
+        // destination and published only after successful compilation/self-test.
+        let exe_path = app_dir.join("volume_helper_checked_v3.exe");
+        ensure_helper(&exe_path, compile_helper, validate_helper, atomic_publish)?;
 
         let control = Self {
             helper_path: exe_path,
@@ -187,6 +168,66 @@ impl VolumeControl {
             "Volume readback mismatch"
         );
         Ok(())
+    }
+}
+
+fn compile_helper(exe_path: &Path) -> Result<()> {
+    info!("Compiling volume helper in private staging directory...");
+    let cs_path = exe_path.with_extension("cs");
+    std::fs::write(&cs_path, VOLUME_HELPER_CS)?;
+    let csc = find_csc()?;
+    let status = Command::new(&csc)
+        .args([
+            &format!("/out:{}", exe_path.display()),
+            "/target:exe",
+            "/optimize+",
+            "/nologo",
+            &cs_path.display().to_string(),
+        ])
+        .output()
+        .with_context(|| format!("Failed to run csc.exe at {:?}", csc))?;
+    anyhow::ensure!(
+        status.status.success(),
+        "C# compilation failed: stdout: {} stderr: {}",
+        String::from_utf8_lossy(&status.stdout).trim(),
+        String::from_utf8_lossy(&status.stderr).trim()
+    );
+    Ok(())
+}
+fn validate_helper(path: &Path) -> Result<()> {
+    let output = Command::new(path)
+        .arg("self-test")
+        .output()
+        .context("Helper self-test could not launch")?;
+    anyhow::ensure!(
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).trim() == "adaptive-volume-checked-v3",
+        "Invalid volume helper self-test"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn actual_csharp_helper_compiles_and_self_tests_without_audio() {
+        // Windows CI proves the embedded C# compile + non-device command. No get/set,
+        // endpoint enumeration, controller launch, or device operation is performed.
+        let temp = crate::system::helper_cache::BuildDirectory::new(&std::env::temp_dir()).unwrap();
+        let cache = temp.path().join("volume_helper_checked_v3.exe");
+        ensure_helper(&cache, compile_helper, validate_helper, atomic_publish).unwrap();
+        validate_helper(&cache).unwrap();
+        ensure_helper(
+            &cache,
+            |_| panic!("valid executable should not recompile"),
+            validate_helper,
+            atomic_publish,
+        )
+        .unwrap();
+        std::fs::write(&cache, b"interrupted old executable").unwrap();
+        ensure_helper(&cache, compile_helper, validate_helper, atomic_publish).unwrap();
+        validate_helper(&cache).unwrap();
     }
 }
 
