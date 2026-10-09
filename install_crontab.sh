@@ -6,6 +6,14 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANAGER_SCRIPT="$SCRIPT_DIR/adaptive_controller_manager.sh"
+RUST_BINARY="$SCRIPT_DIR/adaptive-rust/target/release/adaptive-controller"
+
+# The manager requires the native backend; never install silently inactive jobs.
+if [[ ! -f "$RUST_BINARY" || ! -x "$RUST_BINARY" ]]; then
+    printf 'Required executable Rust backend is unavailable: %s\n' "$RUST_BINARY" >&2
+    printf 'Build it first, then rerun this installer:\n  cd %q && cargo build --release -p adaptive-controller --locked\n' "$SCRIPT_DIR/adaptive-rust" >&2
+    exit 1
+fi
 
 echo "🚀 Installing Adaptive Controller Cron Jobs..."
 echo "📊 Optimized 10-minute interval with flash detection and comprehensive resource cleanup"

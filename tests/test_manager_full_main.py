@@ -72,6 +72,9 @@ def announce(role):
         stream.write(json.dumps(record) + "\n")
 
 announce("backend")
+if mode == "complete":
+    print("Converged in 0.0s", flush=True)
+    sys.exit(0)
 if mode == "restart":
     try:
         fd = os.open(os.environ["TEST_FIRST_LAUNCH"], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -285,6 +288,40 @@ class FullMainTests(unittest.TestCase):
         self.assertIsNone(unrelated.poll(), "Unrelated shell was signalled")
         self.assertFalse(fixture.pid_file.exists())
         self.assertEqual(fixture.events(), [])
+
+    def test_stale_lock_with_live_unrelated_pid_does_not_block_start(self):
+        for command in ("check", "start", "restart"):
+            with self.subTest(command=command):
+                fixture = self.fixture("complete")
+                unrelated = fixture.spawn(["bash", "-c", "read -r -t 30 ignored"])
+                generation = process_info(unrelated.pid)["start"]
+                fixture.lock_file.write_text(f"{unrelated.pid}\n")
+                manager = fixture.manager(command)
+                output, errors = manager.communicate(timeout=4)
+                self.assertEqual(manager.returncode, 0, output + errors)
+                self.assertIsNone(unrelated.poll(), "Stale lock owner was signalled")
+                self.assertEqual(process_info(unrelated.pid)["start"], generation)
+                self.assertEqual(len(fixture.events()), 1)
+                self.assertEqual(json.loads(fixture.ambient.read_text())["ambient"], 40)
+                self.assert_clean(fixture)
+
+    def test_overlapping_check_keeps_owned_lock_and_single_backend(self):
+        fixture = self.fixture()
+        first = fixture.manager("start")
+        wait_for(fixture.running_supervisor, "first supervisor")
+        wait_for(lambda: fixture.events(), "first backend")
+        lock = fixture.lock_file.read_text()
+        self.assertEqual(lock.strip(), str(first.pid))
+        second = fixture.manager("check")
+        output, errors = second.communicate(timeout=2)
+        self.assertEqual(second.returncode, 0, output + errors)
+        self.assertIsNone(first.poll())
+        self.assertEqual(fixture.lock_file.read_text(), lock)
+        self.assertEqual(len(fixture.events()), 1)
+        self.assertFalse(fixture.ambient.exists())
+        first.terminate()
+        first.communicate(timeout=5)
+        self.assert_clean(fixture)
 
     def test_matching_timeout_with_stale_start_ticks_is_not_signalled(self):
         fixture = self.fixture()

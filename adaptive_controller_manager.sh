@@ -256,13 +256,9 @@ start_controller() {
         log_message "System resources unavailable; adjustment deferred"
         return 1
     fi
-    if [[ -f "$LOCK_FILE" ]]; then
-        local lock_pid
-        lock_pid=$(cat "$LOCK_FILE")
-        if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
-            rm -f "$LOCK_FILE"
-        fi
-    fi
+    # Main holds the exclusive guard, and no validated controller is running.
+    # A leftover PID can belong to an unrelated process after PID reuse.
+    rm -f "$LOCK_FILE" || return 2
     if ! (set -C; echo $$ > "$LOCK_FILE") 2>/dev/null; then
         log_message "Another instance is starting (lock file exists)"
         return 1
