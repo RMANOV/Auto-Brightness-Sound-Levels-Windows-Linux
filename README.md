@@ -34,7 +34,7 @@ An innovative cross-platform system that revolutionizes device display and audio
 - **Zero-copy** NumPy interop via PyO3
 - **Lock-free** channel architecture
 - **Branchless** change detection
-- **Fast log10** approximation
+- Accurate volume logarithm (standard `f32::log10`)
 
 </td>
 </tr>
@@ -70,7 +70,7 @@ python3 benchmark_numba.py
 ./adaptive_controller_manager.sh status
 
 # View real-time logs
-tail -f /tmp/adaptive_controller.log
+tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/adaptive-controller/controller.log"
 
 # Manual control (if needed)
 ./adaptive_controller_manager.sh start|stop|restart
@@ -81,9 +81,9 @@ tail -f /tmp/adaptive_controller.log
 - **Dynamic activation windows** - 30min before to 2h after each sunrise/sunset (automatically calculated for your location)
 - **Geographic intelligence** - auto-detects coordinates or uses manual configuration
 - **Seasonal adaptation** - windows automatically adjust as days get longer/shorter
-- **Optimized flash detection** - 40-second wait then compares with saved state (>40% change threshold)
+- **Ambient change detection** - short camera probe compares with the ambient reading from the last confirmed adjustment (>40% change threshold); invalid measurements are errors
 - **Eliminates unnecessary activations** outside natural light transition periods
-- **Fallback protection** - reverts to time-based logic if sunrise/sunset calculation fails
+- **Schedule errors** - defer adjustment when sunrise/sunset calculation fails
 
 ## 🔥 Technical Achievements
 
@@ -140,9 +140,9 @@ Noise filtering and normalization
 - **NOAA Astronomical Calculations**: Pure Python implementation for accurate sunrise/sunset times
 - **Location Auto-Detection**: Automatically detects coordinates from timezone or manual config
 - **Seasonal Adaptation**: Windows automatically adjust as days get longer/shorter throughout year
-- **Optimized Flash Detection**: 40-second wait then compares with saved state values (>40% threshold)
+- **Ambient Change Detection**: Short camera probe compared with the last confirmed ambient baseline (>40% threshold)
 - **Eliminates Unnecessary Activations**: Complete deactivation outside natural light transition periods
-- **Fallback Protection**: Reverts to time-based logic if astronomical calculations fail
+- **Schedule Error Handling**: Defers adjustment if astronomical calculations fail
 - **Comprehensive Resource Cleanup**: Automatic cleanup after each 8-minute burst mode
 - **Signal-Aware Termination**: Proper cleanup on timeout, interruption, or normal exit
 - **System Resource Monitoring**: CPU load and memory usage protection
@@ -190,7 +190,16 @@ python3 benchmark_numba.py
 | `screen_analysis` | 0.08ms | **0.02ms** | **4x** |
 | `change_detection` | 0.01ms | **0.002ms** | **5x** |
 
-> 💡 **Tip**: System auto-detects and uses Rust backend when available, with seamless Python fallback.
+> The Linux scheduled manager requires the Rust backend. Its runtime files live in the user's state directory; Python remains available as a separate manual controller. See [Linux restoration and verification boundaries](adaptive-rust/LINUX_RESTORATION.md).
+
+### Regression checks
+
+`python3 -m unittest discover -s tests -v` runs isolated camera, manager lifecycle,
+Sun-window and temperature-board tests without touching host hardware. In
+`adaptive-rust`, run `cargo test --workspace --locked`. Linux builds require ALSA
+development headers, pkg-config and libclang. GitHub Actions runs these checks
+on Linux and the Rust tests on Windows. Camera, panel and board behavior still
+require testing on the actual devices.
 
 ## 🎯 Impact
 

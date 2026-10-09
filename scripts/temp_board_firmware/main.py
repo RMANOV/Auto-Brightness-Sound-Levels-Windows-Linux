@@ -24,7 +24,14 @@ def clamp_int(value, default=0, lo=0, hi=120):
     return value
 
 
-def parse_key_payload(line):
+def valid_temperatures(values):
+    try:
+        return all(-float("inf") < float(value) < float("inf") for value in values)
+    except (ValueError, TypeError):
+        return False
+
+
+def parse_key_payload(line, strict=False):
     data = {}
     for part in line.split("|"):
         if "=" not in part:
@@ -32,6 +39,8 @@ def parse_key_payload(line):
         key, value = part.split("=", 1)
         data[key.strip().upper()] = value.strip()
     if "CPU" not in data:
+        return None
+    if strict and not valid_temperatures(data[key] for key in ("CPU", "PCH", "NVME") if key in data):
         return None
     return {
         "cpu": clamp_int(data.get("CPU")),
@@ -45,16 +54,29 @@ def parse_key_payload(line):
     }
 
 
-def parse_legacy_payload(line):
+def parse_legacy_payload(line, strict=False):
     parts = line.split("|")
     if len(parts) != 7:
         return None
+    cpu_header = parts[0][3:-1]
+    # temp-bars and pc-monitor share seven fields, but advertise different headers.
+    temp_bars = parts[1] == "NVME--" or (
+        parts[1].startswith("NV") and parts[1].endswith("C")
+        and parts[1][2:-1].isdigit()
+    )
+    if strict and (
+        not parts[0].startswith("CPU") or not parts[0].endswith("C")
+        or not valid_temperatures((cpu_header,))
+        or not (temp_bars or parts[1] == "GPU--")
+        or not valid_temperatures(parts[2:5])
+    ):
+        return None
     return {
-        "cpu": clamp_int(parts[2]),
-        "pch": 0,
+        "cpu": clamp_int(parts[2] if temp_bars else cpu_header),
+        "pch": clamp_int(parts[3]) if temp_bars else 0,
         "nvme": clamp_int(parts[4]),
-        "load": clamp_int(parts[2], hi=100),
-        "ram": clamp_int(parts[3], hi=100),
+        "load": 0 if temp_bars else clamp_int(parts[2], hi=100),
+        "ram": 0 if temp_bars else clamp_int(parts[3], hi=100),
         "bat": clamp_int(parts[5], default=100, hi=100),
         "ac": "1" if parts[6] == "1" else "0",
         "fan": 0,
@@ -113,6 +135,7 @@ def large_number_in_section(value, x0, width):
         digit_h = 36
         thick = 2
         gap = 2
+    digit_w = min(digit_w, (width - (len(text) - 1) * gap) // len(text))
     total_w = len(text) * digit_w + (len(text) - 1) * gap
     x = x0 + max(0, (width - total_w) // 2)
     y = 20
@@ -124,7 +147,7 @@ def large_number_in_section(value, x0, width):
 def section(x0, width, label, value):
     label_x = x0 + max(0, (width - len(label) * 8) // 2)
     oled.text(label, label_x, 2)
-    large_number_in_section(value, x0, width)
+    large_number_in_section(value, x0, width - 9)
     oled.text("C", x0 + width - 9, 52)
 
 
@@ -142,6 +165,7 @@ def main():
     global oled
     from machine import I2C, Pin, UART
     import ssd1306
+    import uselect
 
     i2c = I2C(scl=Pin(14), sda=Pin(12), freq=400000)
     oled = ssd1306.SSD1306_I2C(128, 64, i2c)
@@ -149,25 +173,49 @@ def main():
 
     clear_msg("THERMAL WATCH", "waiting serial", "115200 baud")
     last_rx = time.ticks_ms()
+    showing_readings = False
+    poll = uselect.poll()
+    poll.register(sys.stdin, uselect.POLLIN)
+    pending = ""
+    discarding = False
 
     while True:
         try:
-            raw = sys.stdin.readline()
-            if not raw:
-                continue
-            line = raw.strip()
-            if not line:
-                continue
-            data = parse_key_payload(line) or parse_legacy_payload(line)
-            if data is None:
-                clear_msg("BAD PAYLOAD", line[:16], "need CPU=..")
-                time.sleep(1)
-                continue
-            draw_status(data)
-            last_rx = time.ticks_ms()
+            # Never wait for a newline; bound both work per tick and partial-line storage.
+            for _ in range(128):
+                if not any(flags & uselect.POLLIN for _, flags in poll.poll(0)):
+                    break
+                raw = sys.stdin.read(1)
+                if not raw:
+                    break
+                if raw in "\r\n":
+                    if discarding:
+                        discarding = False
+                        continue
+                    line = pending.strip()
+                    pending = ""
+                    if not line:
+                        continue
+                    data = parse_key_payload(line, strict=True) or parse_legacy_payload(line, strict=True)
+                    if data is None:
+                        clear_msg("BAD PAYLOAD", line[:16], "need CPU=..")
+                        continue
+                    draw_status(data)
+                    last_rx = time.ticks_ms()
+                    showing_readings = True
+                elif not discarding:
+                    if len(pending) >= 256:
+                        pending = ""
+                        discarding = True
+                        clear_msg("BAD PAYLOAD", "line too long", "need CPU=..")
+                    else:
+                        pending += raw
+            if showing_readings and time.ticks_diff(time.ticks_ms(), last_rx) >= 5000:
+                clear_msg("THERMAL WATCH", "waiting serial", "115200 baud")
+                showing_readings = False
         except Exception as exc:
             clear_msg("ERROR", type(exc).__name__[:16], str(exc)[:16])
-            time.sleep(2)
+        time.sleep_ms(50)
 
 
 if __name__ == "__main__":

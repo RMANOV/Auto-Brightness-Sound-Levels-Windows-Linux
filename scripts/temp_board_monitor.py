@@ -83,7 +83,7 @@ def read_host_temperatures() -> list[Temperature]:
                 celsius = float(raw) / 1000.0
             except ValueError:
                 continue
-            prefix = input_path.name.removesuffix("_input")
+            prefix = input_path.name[:-len("_input")]
             label = read_text(hwmon / f"{prefix}_label") or prefix
             temps.append(Temperature("hwmon", f"{chip_name}:{label}", celsius))
 
@@ -246,7 +246,24 @@ def open_serial(path: str, baud: int) -> int:
 
 def write_serial_fd(fd: int, payload: str) -> int:
     data = payload.encode("utf-8", errors="replace")
-    written = os.write(fd, data)
+    deadline = time.monotonic() + 2.0
+    written = 0
+    while written < len(data):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Serial write did not complete within 2 seconds")
+        try:
+            count = os.write(fd, data[written:])
+        except InterruptedError:
+            continue
+        except BlockingIOError:
+            count = 0
+        if count:
+            written += count
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Serial write did not complete within 2 seconds")
+        select.select([], [fd], [], min(0.1, remaining))
     termios.tcdrain(fd)
     return written
 
@@ -400,16 +417,20 @@ def read_battery_state() -> tuple[int, int]:
         except ValueError:
             continue
 
-    ac_online = 1
-    for path in sorted(Path("/sys/class/power_supply").glob("A*C*/online")):
-        raw = read_text(path)
+    mains_states = []
+    for supply in sorted(Path("/sys/class/power_supply").glob("*")):
+        if read_text(supply / "type") != "Mains":
+            continue
+        raw = read_text(supply / "online")
         if raw is None:
             continue
         try:
-            ac_online = 1 if int(raw) else 0
-            break
+            state = int(raw)
         except ValueError:
             continue
+        if state in (0, 1):
+            mains_states.append(state)
+    ac_online = int(any(mains_states)) if mains_states else 1
     return capacity, ac_online
 
 

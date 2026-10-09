@@ -11,6 +11,30 @@ import os
 import json
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def _local_timezone():
+    """Read local IANA rules without spawning commands or caching today's offset."""
+    names = [os.environ.get('TZ', '').lstrip(':')]
+    try:
+        localtime = str(Path('/etc/localtime').resolve())
+        if '/zoneinfo/' in localtime:
+            names.append(localtime.split('/zoneinfo/', 1)[1])
+    except OSError:
+        pass
+    for name in names:
+        if name and not name.startswith('/'):
+            try:
+                return ZoneInfo(name)
+            except (ValueError, ZoneInfoNotFoundError):
+                pass
+    # Some installations copy the tzfile instead of using an IANA-named link.
+    try:
+        with Path('/etc/localtime').open('rb') as stream:
+            return ZoneInfo.from_file(stream)
+    except (OSError, ValueError):
+        return None
 
 
 class SunCalculator:
@@ -28,6 +52,8 @@ class SunCalculator:
         self.latitude = latitude
         self.longitude = longitude
         self.timezone_offset = timezone_offset
+        self._fixed_timezone_offset = timezone_offset is not None
+        self._timezone = None
         
         # Try to auto-detect location if not provided
         if any(value is None for value in (latitude, longitude, timezone_offset)):
@@ -42,10 +68,25 @@ class SunCalculator:
             try:
                 with open(config_path, 'r') as f:
                     config = json.load(f)
-                    self.latitude = config.get('latitude')
-                    self.longitude = config.get('longitude') 
-                    self.timezone_offset = config.get('timezone_offset')
-                    return
+                    if self.latitude is None:
+                        self.latitude = config.get('latitude')
+                    if self.longitude is None:
+                        self.longitude = config.get('longitude')
+                    if not self._fixed_timezone_offset:
+                        name = config.get('timezone_name')
+                        if name:
+                            try:
+                                self._timezone = ZoneInfo(name)
+                            except (ValueError, ZoneInfoNotFoundError):
+                                pass
+                        self._timezone = self._timezone or _local_timezone()
+                        self.timezone_offset = (
+                            datetime.datetime.now(self._timezone).utcoffset().total_seconds() / 3600
+                            if self._timezone is not None else config.get('timezone_offset')
+                        )
+                    if all(value is not None for value in
+                           (self.latitude, self.longitude, self.timezone_offset)):
+                        return
             except (json.JSONDecodeError, KeyError):
                 pass
         
@@ -60,9 +101,12 @@ class SunCalculator:
         """Estimate location from system timezone (rough approximation)"""
         try:
             # Get system timezone offset
-            now = datetime.datetime.now()
-            utc_now = datetime.datetime.utcnow()
-            self.timezone_offset = (now - utc_now).total_seconds() / 3600
+            if not self._fixed_timezone_offset:
+                self._timezone = self._timezone or _local_timezone()
+                now = datetime.datetime.now(self._timezone)
+                if self._timezone is None:
+                    now = now.astimezone()
+                self.timezone_offset = now.utcoffset().total_seconds() / 3600
             
             # Rough geographic estimates based on common timezones
             # These are very approximate but better than nothing
@@ -76,17 +120,20 @@ class SunCalculator:
             }
             
             offset_key = round(self.timezone_offset)
-            if offset_key in timezone_map:
-                self.latitude, self.longitude = timezone_map[offset_key]
-            else:
-                # Default to Central Europe if unknown
-                self.latitude, self.longitude = (50.0, 10.0)
+            latitude, longitude = timezone_map.get(offset_key, (50.0, 10.0))
+            if self.latitude is None:
+                self.latitude = latitude
+            if self.longitude is None:
+                self.longitude = longitude
                 
         except Exception:
             # Ultimate fallback: Central Europe
-            self.latitude = 50.0
-            self.longitude = 10.0
-            self.timezone_offset = 1.0
+            if self.latitude is None:
+                self.latitude = 50.0
+            if self.longitude is None:
+                self.longitude = 10.0
+            if self.timezone_offset is None:
+                self.timezone_offset = 1.0
     
     def _save_config(self, config_path):
         """Save detected location to config file"""
@@ -98,6 +145,8 @@ class SunCalculator:
                 'auto_detected': True,
                 'detection_date': datetime.datetime.now().isoformat()
             }
+            if self._timezone is not None and getattr(self._timezone, 'key', None):
+                config['timezone_name'] = self._timezone.key
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent=2)
         except Exception:
@@ -233,6 +282,10 @@ class SunCalculator:
         
         def minutes_to_time(minutes):
             """Convert minutes from midnight to time object"""
+            if self._timezone is not None:
+                instant = datetime.datetime.combine(date, datetime.time(), datetime.timezone.utc)
+                instant += datetime.timedelta(minutes=minutes)
+                return instant.astimezone(self._timezone).time().replace(second=0, microsecond=0)
             minutes += local_offset_minutes
             
             # Handle day overflow
@@ -262,52 +315,51 @@ class SunCalculator:
             dict with keys: sunrise_start, sunrise_end, sunset_start, sunset_end
             All values are datetime.time objects
         """
-        sun_times = self.calculate_sun_times(date)
-        
-        def add_hours_to_time(time_obj, hours):
-            """Add hours to a time object"""
-            dt = datetime.datetime.combine(datetime.date.today(), time_obj)
-            dt += datetime.timedelta(hours=hours)
-            return dt.time()
-        
-        return {
-            'sunrise_start': add_hours_to_time(sun_times['sunrise'], -0.5),
-            'sunrise_end': add_hours_to_time(sun_times['sunrise'], 2.0),
-            'sunset_start': add_hours_to_time(sun_times['sunset'], -0.5),
-            'sunset_end': add_hours_to_time(sun_times['sunset'], 2.0)
-        }
+        date = date if date is not None else datetime.date.today()
+        result = {}
+        for name, (start, end) in self._event_windows(date).items():
+            if self._timezone is not None:
+                start, end = start.astimezone(self._timezone), end.astimezone(self._timezone)
+            result[name + '_start'] = start.time()
+            result[name + '_end'] = end.time()
+        return result
+
+    def _event_windows(self, date):
+        """Keep each window attached to its event date, including midnight/DST."""
+        times = self.calculate_sun_times(date)
+        result = {}
+        for name in ('sunrise', 'sunset'):
+            event = datetime.datetime.combine(date, times[name])
+            if self._timezone is not None:
+                event = event.replace(tzinfo=self._timezone).astimezone(datetime.timezone.utc)
+            result[name] = (event - datetime.timedelta(minutes=30),
+                            event + datetime.timedelta(hours=2))
+        return result
     
-    def is_in_active_window(self, current_time=None):
+    def is_in_active_window(self, current_time=None, date=None):
         """
         Check if current time is within sunrise/sunset activation windows
         
         Args:
             current_time: datetime.time object (defaults to now)
+            date: local calendar date (defaults to today)
             
         Returns:
             tuple: (is_active, window_type) where window_type is 'sunrise', 'sunset', or None
         """
-        if current_time is None:
-            current_time = datetime.datetime.now().time()
-        
-        windows = self.get_activation_windows()
-        
-        def contains(start, end):
-            if start <= end:
-                return start <= current_time <= end
-            return current_time >= start or current_time <= end
-
-        # Check sunrise window first, including day overflow
-        if contains(windows['sunrise_start'], windows['sunrise_end']):
-            return True, 'sunrise'
-        
-        # Check sunset window (handle day overflow)
-        sunset_start = windows['sunset_start']
-        sunset_end = windows['sunset_end']
-        
-        if contains(sunset_start, sunset_end):
-            return True, 'sunset'
-        
+        if date is None or current_time is None:
+            now = datetime.datetime.now(self._timezone)
+            date = date if date is not None else now.date()
+            current_time = current_time if current_time is not None else now.time()
+        instant = datetime.datetime.combine(date, current_time)
+        if self._timezone is not None:
+            instant = instant.replace(tzinfo=self._timezone).astimezone(datetime.timezone.utc)
+        windows = [self._event_windows(date + datetime.timedelta(days=delta))
+                   for delta in (-1, 0, 1)]
+        # Preserve sunrise precedence even when different event dates overlap.
+        for name in ('sunrise', 'sunset'):
+            if any(day[name][0] <= instant <= day[name][1] for day in windows):
+                return True, name
         return False, None
 
 
