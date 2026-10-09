@@ -84,9 +84,9 @@ class FirmwareTests(unittest.TestCase):
 
     def test_legacy_exact_seven(self):
         module = self.load()
-        # Existing CPU/load conflation is characterized, not certified as temperature.
+        # Header is Celsius; numeric rows retain independent load and RAM values.
         self.assertEqual(module.parse_legacy_payload('CPU12C|GPU--|25|35|0|80|1'),
-                         {'cpu': 25, 'pch': 0, 'nvme': 0, 'load': 25, 'ram': 35, 'bat': 80, 'ac': '1', 'fan': 0})
+                         {'cpu': 12, 'pch': 0, 'nvme': 0, 'load': 25, 'ram': 35, 'bat': 80, 'ac': '1', 'fan': 0})
 
     def test_legacy_bad_arity(self):
         module = self.load()

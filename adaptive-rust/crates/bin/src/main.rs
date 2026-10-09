@@ -50,11 +50,20 @@ fn main() -> Result<()> {
     }
 
     // Main loop
+    let mut converged = false;
+    let mut failure = None;
     while !shutdown.load(Ordering::SeqCst) {
         match ctrl.tick() {
-            Ok(true) => break, // Converged
+            Ok(true) => {
+                converged = true;
+                break;
+            } // Confirmed convergence
             Ok(false) => {}
-            Err(e) => tracing::error!("Controller error: {}", e),
+            Err(e) => {
+                tracing::error!("Controller error: {}", e);
+                failure = Some(e);
+                break;
+            }
         }
     }
 
@@ -62,5 +71,12 @@ fn main() -> Result<()> {
     ctrl.cleanup();
     info!("Cleanup complete, exiting");
 
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    anyhow::ensure!(
+        continuous || converged,
+        "Controller stopped without confirmed convergence"
+    );
     Ok(())
 }

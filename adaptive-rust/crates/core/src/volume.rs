@@ -20,14 +20,9 @@
 /// - `bias = 0.22` - Baseline offset (ensures min audible level)
 ///
 /// # Performance
-/// - Uses fast log10 approximation when available
-/// - Target: 0.003ms (5x faster than Numba's 0.015ms)
+/// - Uses the standard f32 logarithm; no approximation or measured speed claim.
 #[inline]
-pub fn calculate_volume_mapping(
-    normalized_noise: f32,
-    min_volume: f32,
-    max_volume: f32,
-) -> f32 {
+pub fn calculate_volume_mapping(normalized_noise: f32, min_volume: f32, max_volume: f32) -> f32 {
     const CURVE_FACTOR: f32 = 0.55;
     const MULTIPLIER: f32 = 12.0;
     const BIAS: f32 = 0.22;
@@ -47,32 +42,16 @@ pub fn calculate_volume_mapping(
     adjusted_noise * volume_range + min_volume
 }
 
-/// Fast log10 approximation using integer bit manipulation.
+/// Compatibility entry point for log10, using the standard implementation.
 ///
-/// Accurate to ~0.1% for positive inputs.
-/// About 3x faster than std log10.
+/// The former two-term mantissa approximation exceeded the volume mapping's
+/// accuracy contract and mishandled subnormal and nonpositive inputs.
 #[inline]
 pub fn fast_log10(x: f32) -> f32 {
-    // log10(x) = log2(x) / log2(10) ≈ log2(x) * 0.30103
-    fast_log2(x) * 0.30102999566398_f32
+    x.log10()
 }
 
-/// Fast log2 approximation.
-#[inline]
-fn fast_log2(x: f32) -> f32 {
-    // IEEE 754 bit hack for fast log2
-    let bits = x.to_bits();
-    let exponent = ((bits >> 23) & 0xff) as i32 - 127;
-    let mantissa = f32::from_bits((bits & 0x007fffff) | 0x3f800000);
-
-    // Polynomial approximation for log2(mantissa) where mantissa in [1, 2)
-    let m = mantissa - 1.0;
-    let log2_mantissa = m * (1.4426950408889634 - m * 0.7213475204444817);
-
-    exponent as f32 + log2_mantissa
-}
-
-/// Volume mapping with fast log approximation.
+/// Compatibility volume mapping with the same logarithmic curve and accuracy.
 #[inline]
 pub fn calculate_volume_mapping_fast(
     normalized_noise: f32,
@@ -127,7 +106,13 @@ mod tests {
             let std_log = x.log10();
             let fast = fast_log10(x);
             let error = (std_log - fast).abs() / std_log.abs().max(0.001);
-            assert!(error < 0.02, "Error too high for x={}: std={}, fast={}", x, std_log, fast);
+            assert!(
+                error < 0.02,
+                "Error too high for x={}: std={}, fast={}",
+                x,
+                std_log,
+                fast
+            );
         }
     }
 
@@ -140,7 +125,46 @@ mod tests {
             assert!(
                 (std_result - fast_result).abs() < 0.5,
                 "Mismatch at noise={}: std={}, fast={}",
-                noise, std_result, fast_result
+                noise,
+                std_result,
+                fast_result
+            );
+        }
+    }
+    #[test]
+    fn logarithm_special_values_follow_ieee_contract() {
+        assert_eq!(fast_log10(0.0), f32::NEG_INFINITY);
+        assert!(fast_log10(-1.0).is_nan());
+        assert!(fast_log10(f32::NAN).is_nan());
+        assert_eq!(fast_log10(f32::INFINITY), f32::INFINITY);
+    }
+    #[test]
+    fn logarithm_handles_subnormal_and_power_boundaries() {
+        for x in [
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            0.9999999,
+            1.0,
+            1.0000001,
+            1.9999999,
+            2.0,
+            2.0000002,
+            f32::MAX,
+        ] {
+            let reference = (x as f64).log10();
+            assert!((fast_log10(x) as f64 - reference).abs() < 0.00001, "x={x}");
+        }
+    }
+    #[test]
+    fn fast_volume_agrees_across_dense_supported_noise_domain() {
+        for i in 0..=10000 {
+            let noise = i as f32 / 10000.0;
+            assert!(
+                (calculate_volume_mapping_fast(noise, 3.0, 35.0)
+                    - calculate_volume_mapping(noise, 3.0, 35.0))
+                .abs()
+                    < 0.5,
+                "noise={noise}"
             );
         }
     }

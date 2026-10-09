@@ -7,3 +7,6 @@ mod volume;
 
 pub use brightness::BrightnessControl;
 pub use volume::VolumeControl;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod command_linux;
