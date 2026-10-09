@@ -37,8 +37,10 @@ def measure(cv, clock=time.monotonic, wall_clock=time.time):
     try:
         if not cap.isOpened():
             raise RuntimeError("Camera unavailable")
-        if not (cap.set(cv.CAP_PROP_FRAME_WIDTH, 320) and cap.set(cv.CAP_PROP_FRAME_HEIGHT, 240)):
-            raise RuntimeError("Camera measurement format unavailable")
+        # Some cameras keep their negotiated size despite rejecting resize hints.
+        # The actual returned frames and deadline below determine usability.
+        cap.set(cv.CAP_PROP_FRAME_WIDTH, 320)
+        cap.set(cv.CAP_PROP_FRAME_HEIGHT, 240)
         values = []
         for index in range(6):
             if clock() - start > 2.5:

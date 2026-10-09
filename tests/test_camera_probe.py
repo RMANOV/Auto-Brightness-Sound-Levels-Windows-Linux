@@ -15,11 +15,11 @@ def sample(value, timestamp=1000):
 
 
 class ProbeTests(unittest.TestCase):
-    def cv(self, values, opened=True, bad_frame=False):
+    def cv(self, values, opened=True, bad_frame=False, resize=True):
         class Camera:
-            def __init__(self): self.released = False
+            def __init__(self): self.released = False; self.size_requests = []
             def isOpened(self): return opened
-            def set(self, *args): return True
+            def set(self, *args): self.size_requests.append(args); return resize
             def read(self):
                 value = next(values)
                 if value is None: return False, None
@@ -34,6 +34,19 @@ class ProbeTests(unittest.TestCase):
     def test_drain_warmup_and_median_then_release_without_persisting(self):
         cv, cap = self.cv(iter([250, 240, 230, 0, 255, 0]))
         self.assertEqual(probe.measure(cv, clock=lambda: 0, wall_clock=lambda: 1000), sample(0))
+        self.assertTrue(cap.released)
+
+    def test_unsupported_resize_keeps_valid_negotiated_frames(self):
+        cv, cap = self.cv(iter([250, 240, 230, 0, 255, 0]), resize=False)
+        self.assertEqual(probe.measure(cv, clock=lambda: 0, wall_clock=lambda: 1000), sample(0))
+        self.assertEqual(cap.size_requests, [(cv.CAP_PROP_FRAME_WIDTH, 320),
+                                            (cv.CAP_PROP_FRAME_HEIGHT, 240)])
+        self.assertTrue(cap.released)
+
+    def test_unsupported_resize_does_not_accept_an_empty_frame(self):
+        cv, cap = self.cv(iter([10]), bad_frame=True, resize=False)
+        with self.assertRaisesRegex(RuntimeError, "no frame"):
+            probe.measure(cv, clock=lambda: 0)
         self.assertTrue(cap.released)
 
     def test_missing_empty_nonfinite_and_unavailable_camera_are_errors(self):

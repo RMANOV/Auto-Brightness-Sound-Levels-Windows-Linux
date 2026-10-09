@@ -140,11 +140,16 @@ cleanup_manager() {
 }
 
 # Cron does not inherit the desktop environment needed by PipeWire/PulseAudio.
+runtime_directory_is_private() {
+    [[ -d "$1" && -O "$1" ]] &&
+        [[ "$(stat -c '%a' -- "$1" 2>/dev/null)" == "700" ]]
+}
+
 restore_session_runtime() {
     [[ -z "${XDG_RUNTIME_DIR:-}" ]] || return 0
     local runtime_path
     runtime_path=$(timeout --kill-after=1s 2s loginctl show-user "$UID" -p RuntimePath --value 2>/dev/null) || return 0
-    if [[ "$runtime_path" == /* && -d "$runtime_path" && -O "$runtime_path" ]]; then
+    if [[ "$runtime_path" == "/run/user/$UID" ]] && runtime_directory_is_private "$runtime_path"; then
         export XDG_RUNTIME_DIR="$runtime_path"
     fi
 }
