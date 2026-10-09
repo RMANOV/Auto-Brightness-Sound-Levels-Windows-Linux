@@ -3,6 +3,8 @@
 //! Windows: WMI via PowerShell (laptop backlight)
 //! Falls back gracefully on desktop monitors.
 
+use super::{optional_readback, BrightnessReadback};
+use crate::system::checked_percent;
 use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::{debug, info, warn};
@@ -24,7 +26,7 @@ impl BrightnessControl {
         let available = match output {
             Ok(o) if o.status.success() => {
                 let stdout = String::from_utf8_lossy(&o.stdout);
-                let parsed = stdout.trim().parse::<i32>().is_ok();
+                let parsed = checked_percent(true, &stdout, "brightness").is_ok();
                 if parsed {
                     info!("WMI brightness control available (laptop backlight)");
                 }
@@ -41,10 +43,21 @@ impl BrightnessControl {
         Ok(Self { available })
     }
 
+    pub fn is_available(&self) -> bool {
+        self.available
+    }
+
+    pub(crate) fn get_readback(&self) -> Result<Option<BrightnessReadback>> {
+        optional_readback(self.available, || {
+            Ok(BrightnessReadback {
+                percent: self.get()? as f64,
+                step_percent: 1.0,
+            })
+        })
+    }
+
     pub fn get(&self) -> Result<i32> {
-        if !self.available {
-            return Ok(50);
-        }
+        anyhow::ensure!(self.available, "Windows brightness control unavailable");
 
         let output = Command::new("powershell")
             .args([
@@ -55,21 +68,15 @@ impl BrightnessControl {
             .output()
             .context("Failed to query brightness")?;
 
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(val) = stdout.trim().parse::<i32>() {
-                return Ok(val);
-            }
-        }
-
-        Ok(50)
+        checked_percent(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            "brightness",
+        )
     }
 
     pub fn set(&self, percent: i32) -> Result<()> {
-        if !self.available {
-            debug!("Brightness set skipped (not available)");
-            return Ok(());
-        }
+        anyhow::ensure!(self.available, "Windows brightness control unavailable");
 
         let percent = percent.clamp(1, 100);
         debug!("Setting brightness to {}%", percent);
@@ -86,9 +93,21 @@ impl BrightnessControl {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Brightness set failed: {}", stderr.trim());
+            anyhow::bail!("Brightness set failed: {}", stderr.trim());
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unavailable_wmi_is_capability_none_never_fifty_or_noop_ack() {
+        let control = BrightnessControl { available: false };
+        assert!(control.get_readback().unwrap().is_none());
+        assert!(control.get().is_err());
+        assert!(control.set(30).is_err());
     }
 }

@@ -1,5 +1,6 @@
 //! Linux backlight only: bind one sysfs backlight, never an implicit LED device.
 use super::super::command_linux;
+use super::{optional_readback, BrightnessReadback};
 use anyhow::{Context, Result};
 use std::path::Path;
 #[cfg(test)]
@@ -20,6 +21,18 @@ impl BrightnessControl {
     pub fn get(&self) -> Result<f64> {
         let (raw, max) = read_raw(&self.device, &mut command_linux::output)?;
         Ok(raw as f64 * 100.0 / max as f64)
+    }
+    pub fn is_available(&self) -> bool {
+        true
+    }
+    pub(crate) fn get_readback(&self) -> Result<Option<BrightnessReadback>> {
+        optional_readback(self.is_available(), || {
+            let (raw, max) = read_raw(&self.device, &mut command_linux::output)?;
+            Ok(BrightnessReadback {
+                percent: raw as f64 * 100.0 / max as f64,
+                step_percent: 100.0 / max as f64,
+            })
+        })
     }
     pub fn set(&self, percent: i32) -> Result<()> {
         set_verified(&self.device, percent, &mut command_linux::output)
@@ -101,11 +114,14 @@ where
     let (raw, max) = read_raw(device, run)?;
     // brightnessctl rounds percentages to raw integer hardware steps.
     // Permit at most one raw step, not a fabricated/requested software state.
-    let actual = raw as f64 * 100.0 / max as f64;
-    let tolerance = 100.0 / max as f64;
+    let reading = BrightnessReadback {
+        percent: raw as f64 * 100.0 / max as f64,
+        step_percent: 100.0 / max as f64,
+    };
     anyhow::ensure!(
-        (actual - percent as f64).abs() <= tolerance + 1e-9,
-        "Backlight readback mismatch: requested {percent}%, actual {actual}%"
+        reading.matches_target(percent as f32),
+        "Backlight readback mismatch: requested {percent}%, actual {}%",
+        reading.percent
     );
     Ok(())
 }

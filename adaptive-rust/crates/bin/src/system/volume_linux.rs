@@ -2,7 +2,7 @@
 use super::super::command_linux;
 use anyhow::{Context, Result};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Method {
     Amixer,
     Pactl,
@@ -14,13 +14,9 @@ pub struct VolumeControl {
 
 impl VolumeControl {
     pub fn new() -> Result<Self> {
-        for method in [Method::Amixer, Method::Pactl, Method::Wpctl] {
-            let control = Self { method };
-            if control.get().is_ok() {
-                return Ok(control);
-            }
-        }
-        anyhow::bail!("No readable Linux volume control available")
+        Ok(Self {
+            method: select_method(|method| Self { method }.get())?,
+        })
     }
     pub fn get(&self) -> Result<i32> {
         let (program, args): (&str, &[&str]) = match self.method {
@@ -56,6 +52,18 @@ impl VolumeControl {
     }
 }
 
+fn select_method<F>(mut read: F) -> Result<Method>
+where
+    F: FnMut(Method) -> Result<i32>,
+{
+    for method in [Method::Pactl, Method::Wpctl, Method::Amixer] {
+        if read(method).is_ok() {
+            return Ok(method);
+        }
+    }
+    anyhow::bail!("No readable Linux volume control available")
+}
+
 fn parse_volume(method: Method, text: &str) -> Result<i32> {
     let value = match method {
         Method::Amixer => text
@@ -88,6 +96,48 @@ fn parse_volume(method: Method, text: &str) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn active_session_volume_is_preferred_to_readable_alsa() {
+        let mut calls = Vec::new();
+        assert_eq!(
+            select_method(|m| {
+                calls.push(m);
+                Ok(50)
+            })
+            .unwrap(),
+            Method::Pactl
+        );
+        assert_eq!(calls, [Method::Pactl]);
+        calls.clear();
+        assert_eq!(
+            select_method(|m| {
+                calls.push(m);
+                if m == Method::Pactl {
+                    anyhow::bail!("no pulse")
+                } else {
+                    Ok(50)
+                }
+            })
+            .unwrap(),
+            Method::Wpctl
+        );
+        assert_eq!(calls, [Method::Pactl, Method::Wpctl]);
+        calls.clear();
+        assert_eq!(
+            select_method(|m| {
+                calls.push(m);
+                if m == Method::Amixer {
+                    Ok(50)
+                } else {
+                    anyhow::bail!("no session")
+                }
+            })
+            .unwrap(),
+            Method::Amixer
+        );
+        assert_eq!(calls, [Method::Pactl, Method::Wpctl, Method::Amixer]);
+        assert!(select_method(|_| anyhow::bail!("no control")).is_err());
+    }
     #[test]
     fn actual_linux_formats_and_zero_parse() {
         assert_eq!(

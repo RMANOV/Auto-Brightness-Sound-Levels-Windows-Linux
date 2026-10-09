@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 use crate::audio_capture::AudioCapture;
 use crate::camera::Camera;
-use crate::system::{BrightnessControl, VolumeControl};
+use crate::system::{BrightnessControl, BrightnessReadback, VolumeControl};
 
 /// Sofia, Bulgaria
 const LATITUDE: f64 = 42.6977;
@@ -120,10 +120,17 @@ impl Controller {
         let volume_control = VolumeControl::new()?;
 
         // Get initial values
-        let current_brightness = brightness_control.get()? as f32;
+        // Unavailable capability has no confirmed percent; zero only seeds unused smoothing.
+        let current_brightness = brightness_control
+            .get_readback()?
+            .map_or(0.0, |r| r.percent as f32);
         let current_volume = volume_control.get()? as f32;
 
-        info!("Initial brightness: {}%", current_brightness);
+        if brightness_control.is_available() {
+            info!("Initial brightness: {}%", current_brightness);
+        } else {
+            info!("Brightness unavailable — volume-only adaptation");
+        }
         info!("Initial volume: {}%", current_volume);
 
         // Detect sun window for seasonal adaptation (NOAA algorithm)
@@ -136,9 +143,14 @@ impl Controller {
 
         // Spawn camera thread (sun-position based on Windows)
         let shutdown_clone = Arc::clone(&shutdown);
-        let camera_thread = Some(thread::spawn(move || {
-            camera_worker(brightness_tx, shutdown_clone);
-        }));
+        let camera_thread = if brightness_control.is_available() {
+            Some(thread::spawn(move || {
+                camera_worker(brightness_tx, shutdown_clone)
+            }))
+        } else {
+            drop(brightness_tx);
+            None
+        };
 
         // Spawn audio thread
         let shutdown_clone = Arc::clone(&shutdown);
@@ -185,28 +197,45 @@ impl Controller {
         let prev_target_v = self.last_target_volume;
 
         let fresh_brightness = self.process_brightness()?;
-        self.process_audio()?;
+        let fresh_audio = self.process_audio()?;
+        let brightness_available = self.brightness_control.is_available();
+        if !brightness_available && fresh_audio && self.warmup_frame < self.config.warmup_frames {
+            self.warmup_frame += 1;
+        }
 
         // Auto-exit convergence check (after warmup)
         if self.config.auto_exit && self.warmup_frame >= self.config.warmup_frames {
-            self.current_brightness = self.brightness_control.get()? as f32;
-            let b_ok = confirmed_brightness_stable(
-                fresh_brightness,
-                self.current_brightness,
-                self.last_target_brightness,
-            );
-            let v_ok = prev_target_v.map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0);
-            self.converge_count =
-                advance_convergence_count(self.converge_count, fresh_brightness, b_ok, v_ok);
+            let b_ok = if let Some(reading) = self.brightness_control.get_readback()? {
+                self.current_brightness = reading.percent as f32;
+                confirmed_brightness_stable(fresh_brightness, reading, self.last_target_brightness)
+            } else {
+                true // explicitly unavailable, never a measured/applied brightness
+            };
+            let v_ok = if brightness_available {
+                prev_target_v.map_or(true, |t| (self.smoothed_volume - t).abs() < 1.0)
+            } else {
+                self.current_volume = self.volume_control.get()? as f32;
+                volume_only_stable(fresh_audio, self.current_volume, self.last_target_volume)
+            };
+            let fresh =
+                convergence_sample_ready(brightness_available, fresh_brightness, fresh_audio);
+            self.converge_count = advance_convergence_count(self.converge_count, fresh, b_ok, v_ok);
             if self.converge_count >= 3 {
                 let elapsed = self.start_time.elapsed().as_secs_f32();
                 let window_info = self
                     .sun_window
                     .map_or(String::new(), |w| format!(" ({:?} window)", w));
-                info!(
-                    "Converged in {:.1}s{} — brightness: {:.1}%, volume: {:.1}%",
-                    elapsed, window_info, self.current_brightness, self.current_volume
-                );
+                if brightness_available {
+                    info!(
+                        "Converged in {:.1}s{} — brightness: {:.1}%, volume: {:.1}%",
+                        elapsed, window_info, self.current_brightness, self.current_volume
+                    );
+                } else {
+                    info!(
+                        "Converged in {:.1}s{} — brightness: unavailable, volume only: {:.1}%",
+                        elapsed, window_info, self.current_volume
+                    );
+                }
                 return Ok(true);
             }
         }
@@ -221,6 +250,9 @@ impl Controller {
     }
 
     fn process_brightness(&mut self) -> Result<bool> {
+        if !self.brightness_control.is_available() {
+            return Ok(false);
+        }
         let latest = latest_brightness(&self.brightness_rx)?;
         let fresh = latest.is_some();
         if let Some(frame_data) = latest {
@@ -276,7 +308,7 @@ impl Controller {
         Ok(fresh)
     }
 
-    fn process_audio(&mut self) -> Result<()> {
+    fn process_audio(&mut self) -> Result<bool> {
         let mut latest: Option<AudioData> = None;
         loop {
             match self.audio_rx.try_recv() {
@@ -286,6 +318,7 @@ impl Controller {
             }
         }
 
+        let fresh = latest.is_some();
         if let Some(audio_data) = latest {
             const MIN_NOISE: f32 = 5e-6;
             const MAX_NOISE: f32 = 8e-3;
@@ -316,16 +349,24 @@ impl Controller {
             }
         }
 
-        Ok(())
+        Ok(fresh)
     }
 
     fn print_performance_stats(&self) {
-        info!(
-            "Status: brightness={:.1}%, volume={:.1}%, uptime={:.0}s",
-            self.current_brightness,
-            self.current_volume,
-            self.start_time.elapsed().as_secs_f32()
-        );
+        if self.brightness_control.is_available() {
+            info!(
+                "Status: brightness={:.1}%, volume={:.1}%, uptime={:.0}s",
+                self.current_brightness,
+                self.current_volume,
+                self.start_time.elapsed().as_secs_f32()
+            );
+        } else {
+            info!(
+                "Status: brightness=unavailable, volume={:.1}%, uptime={:.0}s",
+                self.current_volume,
+                self.start_time.elapsed().as_secs_f32()
+            );
+        }
     }
 
     pub fn cleanup(&mut self) {
@@ -515,10 +556,33 @@ fn advance_convergence_count(count: u32, fresh: bool, brightness_ok: bool, volum
     }
 }
 
-fn confirmed_brightness_stable(fresh: bool, actual: f32, target: Option<f32>) -> bool {
+fn confirmed_brightness_stable(
+    fresh: bool,
+    actual: BrightnessReadback,
+    target: Option<f32>,
+) -> bool {
+    fresh && target.map_or(false, |t| actual.matches_target(t))
+}
+
+fn convergence_sample_ready(
+    brightness_available: bool,
+    fresh_brightness: bool,
+    fresh_audio: bool,
+) -> bool {
+    if brightness_available {
+        fresh_brightness
+    } else {
+        fresh_audio
+    }
+}
+
+fn volume_only_stable(fresh: bool, actual: f32, target: Option<f32>) -> bool {
     fresh
         && actual.is_finite()
-        && target.map_or(false, |t| t.is_finite() && (actual - t).abs() < 1.0)
+        && (0.0..=100.0).contains(&actual)
+        && target.map_or(false, |t| {
+            t.is_finite() && (actual - t.round().clamp(0.0, 100.0)).abs() <= 1.0
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -546,15 +610,33 @@ fn parse_timezone_offset(text: &str) -> Result<f64> {
 #[cfg(test)]
 mod restoration_tests {
     use super::*;
+    fn reading(percent: f32) -> BrightnessReadback {
+        BrightnessReadback {
+            percent: percent as f64,
+            step_percent: 1.0,
+        }
+    }
     #[test]
     fn desired_stability_without_measured_application_is_not_convergence() {
-        assert!(!confirmed_brightness_stable(true, 80.0, Some(30.0)));
-        assert!(confirmed_brightness_stable(true, 30.0, Some(30.0)));
-        assert!(!confirmed_brightness_stable(false, 30.0, Some(30.0)));
-        assert!(!confirmed_brightness_stable(true, f32::NAN, Some(30.0)));
         assert!(!confirmed_brightness_stable(
             true,
-            30.0,
+            reading(80.0),
+            Some(30.0)
+        ));
+        assert!(confirmed_brightness_stable(true, reading(30.0), Some(30.0)));
+        assert!(!confirmed_brightness_stable(
+            false,
+            reading(30.0),
+            Some(30.0)
+        ));
+        assert!(!confirmed_brightness_stable(
+            true,
+            reading(f32::NAN),
+            Some(30.0)
+        ));
+        assert!(!confirmed_brightness_stable(
+            true,
+            reading(30.0),
             Some(f32::INFINITY)
         ));
     }
@@ -562,7 +644,7 @@ mod restoration_tests {
     fn convergence_counts_samples_not_empty_poll_ticks() {
         let mut count = 0;
         for fresh in [true, false, false, false, true, false, false, false, true] {
-            let stable = confirmed_brightness_stable(fresh, 30.0, Some(30.0));
+            let stable = confirmed_brightness_stable(fresh, reading(30.0), Some(30.0));
             count = advance_convergence_count(count, fresh, stable, true);
         }
         assert_eq!(count, 3);
@@ -571,6 +653,44 @@ mod restoration_tests {
         assert_eq!(advance_convergence_count(2, true, true, false), 0);
     }
 
+    #[test]
+    fn unavailable_brightness_converges_only_on_fresh_confirmed_audio() {
+        let mut count = 0;
+        for fresh_audio in [true, false, false, true, false, true] {
+            let fresh = convergence_sample_ready(false, true, fresh_audio);
+            let stable = volume_only_stable(fresh_audio, 25.0, Some(25.4));
+            count = advance_convergence_count(count, fresh, true, stable);
+        }
+        assert_eq!(count, 3);
+        assert!(!convergence_sample_ready(false, true, false));
+        assert!(!volume_only_stable(true, 50.0, None));
+        assert!(!volume_only_stable(false, 25.0, Some(25.0)));
+        assert!(!volume_only_stable(true, 50.0, Some(25.0)));
+        assert!(!volume_only_stable(true, f32::NAN, Some(25.0)));
+        assert!(!volume_only_stable(true, 25.0, Some(f32::NAN)));
+        assert_eq!(advance_convergence_count(2, true, true, false), 0);
+        assert!(convergence_sample_ready(true, true, false));
+        assert!(!convergence_sample_ready(true, false, true));
+    }
+    #[test]
+    fn coarse_backlight_reaches_convergence_but_a_missed_write_does_not() {
+        let reading = BrightnessReadback {
+            percent: 100.0 / 3.0,
+            step_percent: 100.0 / 9.0,
+        };
+        let stable = confirmed_brightness_stable(true, reading, Some(30.4));
+        let mut count = 0;
+        for _ in 0..3 {
+            count = advance_convergence_count(count, true, stable, true);
+        }
+        assert_eq!(count, 3);
+        let mismatch = BrightnessReadback {
+            percent: 500.0 / 9.0,
+            step_percent: 100.0 / 9.0,
+        };
+        assert!(!confirmed_brightness_stable(true, mismatch, Some(30.4)));
+        assert_eq!(advance_convergence_count(count, true, false, true), 0);
+    }
     #[test]
     fn required_camera_disconnect_is_an_error_not_an_empty_poll() {
         let (tx, rx) = bounded(2);
