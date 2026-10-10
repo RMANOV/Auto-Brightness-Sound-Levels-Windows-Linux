@@ -39,3 +39,6 @@ mod command_result_tests {
 
 #[cfg(any(target_os = "windows", test))]
 pub(crate) mod helper_cache;
+
+#[cfg(target_os = "windows")]
+pub(crate) mod single_instance;

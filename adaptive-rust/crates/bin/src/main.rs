@@ -31,6 +31,16 @@ fn main() -> Result<()> {
     info!("Platform: {}", std::env::consts::OS);
     info!("Starting up...");
 
+    // Sunrise/sunset and 10-minute tasks may overlap; only one run adjusts.
+    #[cfg(target_os = "windows")]
+    let _instance = match system::single_instance::acquire()? {
+        Some(guard) => guard,
+        None => {
+            info!("Another controller run is active in this session; skipping");
+            return Ok(());
+        }
+    };
+
     // Setup cross-platform signal handler
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();

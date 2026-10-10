@@ -60,3 +60,30 @@ jobs:
         run: cargo test --workspace --locked
       - name: Compile all targets
         run: cargo check --workspace --all-targets --locked
+      - name: Register and inspect the 10-minute task without running the controller
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "AdaptiveController-CI-Every10Min-$env:GITHUB_RUN_ID"
+          $refused = $false
+          try { & .\scripts\setup-10min-task.ps1 -ControllerExe 'C:\missing\adaptive-controller.exe' -TaskName $name } catch { $refused = $true }
+          if (-not $refused -or (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw 'A missing controller must not register a task' }
+          $exe = "$env:SystemRoot\System32\whoami.exe"
+          & .\scripts\setup-10min-task.ps1 -ControllerExe $exe -TaskName $name
+          try {
+            $task = Get-ScheduledTask -TaskName $name
+            $repeat = $task.Triggers[0].Repetition
+            if ($repeat.Interval -ne 'PT10M' -or $repeat.Duration -ne 'P1D') { throw "Unexpected repetition: $($repeat.Interval) / $($repeat.Duration)" }
+            $action = $task.Actions[0]
+            if ($action.Execute -notlike '*\System32\conhost.exe' -or $action.Arguments -ne "--headless `"$exe`"") { throw "Unexpected action: $($action.Execute) $($action.Arguments)" }
+            if ("$($task.Settings.MultipleInstances)" -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT9M') { throw "Unexpected settings: $($task.Settings.MultipleInstances) $($task.Settings.ExecutionTimeLimit)" }
+          } finally {
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false
+          }
+          # The hidden launcher must actually run the program and return.
+          $marker = Join-Path $env:RUNNER_TEMP 'headless-ran.txt'
+          $launcher = Start-Process -FilePath "$env:SystemRoot\System32\conhost.exe" -ArgumentList '--headless', 'cmd.exe', '/c', "echo ok> `"$marker`"" -PassThru
+          if (-not $launcher.WaitForExit(30000)) { $launcher.Kill(); throw 'conhost --headless did not return' }
+          if (-not (Test-Path -LiteralPath $marker)) { throw 'conhost --headless did not run the program' }

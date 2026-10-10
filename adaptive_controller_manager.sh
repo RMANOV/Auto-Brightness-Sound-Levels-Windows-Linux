@@ -176,24 +176,23 @@ flash_detection_check() {
     return 1
 }
 
-# Function to determine if we should be active based on sunrise/sunset times
+# Sunrise/sunset windows stay; between them every 10-minute cron check also
+# runs, so the ambient probe can adapt brightness at any hour.
 should_be_active() {
     # First check if we're in a sunrise/sunset activation window
     local sunrise_sunset_status
     local window_type
     
     # Call the sunrise/sunset calculator
-    local calculator_output
+    local calculator_output calculator_rc
     calculator_output=$("$SCRIPT_DIR/sunrise_sunset_calculator.py" --check-active 2>/dev/null)
-    
-    if [[ $? -eq 0 && -n "$calculator_output" ]]; then
-        if [[ "$calculator_output" == "ACTIVE:"* ]]; then
-            window_type=$(echo "$calculator_output" | cut -d':' -f2)
-            log_message "Sunrise/sunset window: Currently in $window_type activation window"
-        else
-            log_message "Sunrise/sunset window: Outside activation windows - skipping"
-            return 1  # Outside sunrise/sunset activation windows
-        fi
+    calculator_rc=$?
+
+    if [[ $calculator_rc -eq 0 && "$calculator_output" == "ACTIVE:"* ]]; then
+        window_type=$(echo "$calculator_output" | cut -d':' -f2)
+        log_message "Sunrise/sunset window: Currently in $window_type activation window"
+    elif [[ $calculator_rc -eq 0 && "$calculator_output" == "INACTIVE" ]]; then
+        log_message "Sunrise/sunset window: Between activation windows - 10-minute period check"
     else
         log_message "Schedule ERROR: sunrise/sunset calculation unavailable"
         return 2
