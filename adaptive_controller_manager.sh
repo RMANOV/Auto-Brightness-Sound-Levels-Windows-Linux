@@ -256,13 +256,9 @@ start_controller() {
         log_message "System resources unavailable; adjustment deferred"
         return 1
     fi
-    # Main holds the exclusive guard, and no validated controller is running.
-    # A leftover PID can belong to an unrelated process after PID reuse.
-    rm -f "$LOCK_FILE" || return 2
-    if ! (set -C; echo $$ > "$LOCK_FILE") 2>/dev/null; then
-        log_message "Another instance is starting (lock file exists)"
-        return 1
-    fi
+    # Main holds the exclusive guard, and no validated controller is running, so
+    # any lock left here is stale; its PID can belong to an unrelated process.
+    { rm -f "$LOCK_FILE" && echo $$ > "$LOCK_FILE"; } 2>/dev/null || return 2
     OWNED_LOCK=true
     if [[ "$USE_RUST" != "true" || ! -x "$RUST_BINARY" ]]; then
         log_message "Controller ERROR: verified Linux Rust backend is unavailable"

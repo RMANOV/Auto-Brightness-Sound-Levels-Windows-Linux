@@ -42,16 +42,18 @@ where
     V: FnMut(&Path) -> Result<()>,
     P: FnMut(&Path, &Path) -> Result<()>,
 {
-    if path.exists() && validate(path).is_ok() {
+    // A missing cache fails validation like a corrupt one.
+    if validate(path).is_ok() {
         return Ok(());
     }
     let build = BuildDirectory::new(path.parent().context("Helper cache has no parent")?)?;
-    let candidate = build.path().join("volume_helper.exe");
+    let candidate = build
+        .path()
+        .join(path.file_name().context("Helper cache has no file name")?);
     compile(&candidate)?;
     validate(&candidate).context("Compiled helper failed non-device self-test")?;
     // Same-volume replacement: the incumbent is never removed first, even on error.
-    publish(&candidate, path).context("Publishing verified helper")?;
-    Ok(())
+    publish(&candidate, path).context("Publishing verified helper")
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -87,39 +89,20 @@ pub(crate) fn atomic_publish(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    struct Temp(std::path::PathBuf);
-    impl Temp {
-        fn new() -> Self {
-            let p = std::env::temp_dir().join(format!(
-                "adaptive-cache-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::create_dir(&p).unwrap();
-            Self(p)
-        }
-        fn cache(&self) -> std::path::PathBuf {
-            self.0.join("helper.exe")
-        }
+    fn temp() -> BuildDirectory {
+        BuildDirectory::new(&std::env::temp_dir()).unwrap()
     }
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+    fn entries(dir: &BuildDirectory) -> usize {
+        std::fs::read_dir(dir.path()).unwrap().count()
     }
     fn validate(p: &Path) -> Result<()> {
         anyhow::ensure!(std::fs::read(p)? == b"valid", "invalid cache");
         Ok(())
     }
-    fn publish(from: &Path, to: &Path) -> Result<()> {
-        atomic_publish(from, to)
-    }
     #[test]
     fn corrupt_cache_is_rebuilt_and_checked_before_replacement() {
-        let t = Temp::new();
-        let cache = t.cache();
+        let t = temp();
+        let cache = t.path().join("helper.exe");
         std::fs::write(&cache, b"broken").unwrap();
         let mut compilations = 0;
         ensure_helper(
@@ -132,17 +115,17 @@ mod tests {
                 Ok(())
             },
             validate,
-            publish,
+            atomic_publish,
         )
         .unwrap();
         assert_eq!(compilations, 1);
         assert_eq!(std::fs::read(&cache).unwrap(), b"valid");
-        assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 1);
+        assert_eq!(entries(&t), 1);
     }
     #[test]
     fn interrupted_compilation_never_publishes_partial_executable() {
-        let t = Temp::new();
-        let cache = t.cache();
+        let t = temp();
+        let cache = t.path().join("helper.exe");
         assert!(ensure_helper(
             &cache,
             |candidate| {
@@ -150,17 +133,17 @@ mod tests {
                 anyhow::bail!("compiler interrupted")
             },
             validate,
-            publish
+            atomic_publish
         )
         .is_err());
         assert!(!cache.exists());
-        assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 0);
+        assert_eq!(entries(&t), 0);
     }
     #[test]
     fn compile_validation_and_publish_failures_preserve_incumbent() {
         for failure in ["compile", "validate", "publish"] {
-            let t = Temp::new();
-            let cache = t.cache();
+            let t = temp();
+            let cache = t.path().join("helper.exe");
             std::fs::write(&cache, b"broken").unwrap();
             let result = ensure_helper(
                 &cache,
@@ -188,16 +171,16 @@ mod tests {
             );
             assert!(result.is_err(), "{failure}");
             assert_eq!(std::fs::read(&cache).unwrap(), b"broken");
-            assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 1);
+            assert_eq!(entries(&t), 1);
         }
     }
     #[test]
     fn staging_directories_are_exclusive_and_cleanup_only_owned_paths() {
-        let t = Temp::new();
-        let sentinel = t.0.join("unrelated");
+        let t = temp();
+        let sentinel = t.path().join("unrelated");
         std::fs::write(&sentinel, b"keep").unwrap();
-        let a = BuildDirectory::new(&t.0).unwrap();
-        let b = BuildDirectory::new(&t.0).unwrap();
+        let a = BuildDirectory::new(t.path()).unwrap();
+        let b = BuildDirectory::new(t.path()).unwrap();
         assert_ne!(a.path(), b.path());
         assert!(a.path().is_dir());
         assert!(b.path().is_dir());
@@ -205,12 +188,12 @@ mod tests {
         assert!(b.path().is_dir());
         assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
         drop(b);
-        assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 1);
+        assert_eq!(entries(&t), 1);
     }
     #[test]
     fn valid_cache_is_reused_without_compiler_or_publisher() {
-        let t = Temp::new();
-        let cache = t.cache();
+        let t = temp();
+        let cache = t.path().join("helper.exe");
         std::fs::write(&cache, b"valid").unwrap();
         ensure_helper(
             &cache,
