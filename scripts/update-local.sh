@@ -1,7 +1,8 @@
 #!/bin/bash
 # One command to bring a local Linux install up to date: pull main, rebuild the
-# Rust controller and restart it with the new code. The 10-minute cron check
-# already calls the manager, so the new schedule needs no crontab change.
+# Rust controller and restart it with the new code. Crontabs written by
+# install_crontab.sh since 2026-10-04 already run the manager every 10 minutes;
+# older ones (*/30) are reported, never rewritten.
 # Usage: scripts/update-local.sh
 set -euo pipefail
 
@@ -31,7 +32,7 @@ esac
 
 # install_crontab.sh replaces the whole crontab, so it is never run from here.
 step "Checking the 10-minute cron entry"
-if crontab -l 2>/dev/null | grep -Fq "\"$MANAGER\" check"; then
+if crontab -l 2>/dev/null | grep -F "\"$MANAGER\" check" | grep -Eq '^[[:space:]]*\*/10[[:space:]]'; then
     echo "OK: cron runs the manager every 10 minutes (sunrise/sunset windows and the periods between them)."
 else
     echo "No 10-minute cron entry for $MANAGER. Run $REPO/install_crontab.sh once (it replaces your whole crontab)." >&2

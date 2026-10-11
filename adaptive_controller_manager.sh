@@ -284,7 +284,8 @@ start_controller() {
     cleanup_owned_controller
     if [[ "$converged" != "true" ]]; then
         log_message "Controller ERROR: no confirmed convergence (exit $exit_code)"
-        [[ "$exit_code" -eq 0 ]] && return 2
+        # Exit 1 is the manager's policy-skip code; a failed run must not look like one.
+        [[ "$exit_code" -le 1 ]] && return 2
         return "$exit_code"
     fi
     if [[ -z "$PROBE_FILE" ]] || ! command python3 "$SCRIPT_DIR/camera_probe.py" --state "$AMBIENT_STATE" --accept "$PROBE_FILE" >> "$LOG_FILE" 2>&1; then

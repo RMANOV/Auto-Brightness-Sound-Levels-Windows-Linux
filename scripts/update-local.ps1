@@ -18,27 +18,42 @@ if ((git -C $Repo rev-parse --abbrev-ref HEAD) -ne 'main') {
 }
 Invoke-Native 'git merge' { git -C $Repo merge --ff-only origin/main }
 
-# Windows locks a running .exe, so the build could not replace it.
-Step 'Stopping the running controller'
-$running = @(Get-Process -Name 'adaptive-controller' -ErrorAction SilentlyContinue)
-if ($running.Count) {
-    $running | Stop-Process -Force
-    $running | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
-}
-
-Step 'Building the release controller'
-Push-Location (Join-Path $Repo 'adaptive-rust')
+# Windows locks a running .exe, so the build could not replace it. Pause the
+# tasks first so no scheduled run starts the old controller during the build.
+Step 'Pausing the scheduled tasks and stopping the running controller'
+$tasks = @(Get-ScheduledTask -TaskName 'AdaptiveController-*' -ErrorAction SilentlyContinue |
+    Where-Object State -ne 'Disabled')
+$tasks | Disable-ScheduledTask | Out-Null
 try {
-    Invoke-Native 'cargo build' { cargo build --release -p adaptive-controller --locked }
+    $running = @(Get-Process -Name 'adaptive-controller' -ErrorAction SilentlyContinue)
+    if ($running.Count) {
+        $running | Stop-Process -Force
+        $running | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+    }
+
+    Step 'Building the release controller'
+    Push-Location (Join-Path $Repo 'adaptive-rust')
+    try {
+        Invoke-Native 'cargo build' { cargo build --release -p adaptive-controller --locked }
+    } finally {
+        Pop-Location
+    }
 } finally {
-    Pop-Location
+    $tasks | Enable-ScheduledTask | Out-Null
 }
 
-# setup-tasks.ps1 runs the planner from %APPDATA%; keep that copy current too.
+# setup-tasks.ps1 runs the planner from %APPDATA%. Install it there when missing,
+# but never overwrite a copy the user edited (timezone, coordinates, exe path).
 Step 'Registering the scheduled tasks'
 $plannerDir = Join-Path $env:APPDATA 'adaptive-controller'
+$plannerSrc = Join-Path $PSScriptRoot 'daily-planner.ps1'
+$plannerDest = Join-Path $plannerDir 'daily-planner.ps1'
 New-Item -ItemType Directory -Force -Path $plannerDir | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'daily-planner.ps1') -Destination $plannerDir -Force
+if (-not (Test-Path -LiteralPath $plannerDest)) {
+    Copy-Item -LiteralPath $plannerSrc -Destination $plannerDest
+} elseif ((Get-FileHash -LiteralPath $plannerDest).Hash -ne (Get-FileHash -LiteralPath $plannerSrc).Hash) {
+    Write-Warning "Kept your edited $plannerDest. To use the repository version: Copy-Item '$plannerSrc' '$plannerDest' -Force"
+}
 & (Join-Path $PSScriptRoot 'setup-tasks.ps1')
 
 Step 'Starting a run with the new code'

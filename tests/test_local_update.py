@@ -34,7 +34,7 @@ exit "$TEST_MANAGER_RC"
 
 @unittest.skipUnless(shutil.which("bash"), "Bash required")
 class UpdateLocalTests(unittest.TestCase):
-    def run_update(self, branch="main", merge_rc=0, manager_rc=0, cron=True):
+    def run_update(self, branch="main", merge_rc=0, manager_rc=0, cron="*/10"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name, body in LEAVES.items():
@@ -51,7 +51,7 @@ class UpdateLocalTests(unittest.TestCase):
             env = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
                    "HOME": tmp, "TEST_CALLS": str(calls), "TEST_BRANCH": branch,
                    "TEST_MERGE_RC": str(merge_rc), "TEST_MANAGER_RC": str(manager_rc),
-                   "TEST_CRON": f'*/10 * * * * DISPLAY=:0 "{manager}" check' if cron else ""}
+                   "TEST_CRON": f'{cron} * * * * DISPLAY=:0 "{manager}" check' if cron else ""}
             result = subprocess.run(["bash", str(checkout / "scripts/update-local.sh")],
                                     env=env, capture_output=True, text=True, timeout=10)
             lines = calls.read_text().splitlines() if calls.exists() else []
@@ -91,11 +91,15 @@ class UpdateLocalTests(unittest.TestCase):
                 self.assertEqual(result.returncode, expected_rc, result.stdout + result.stderr)
                 self.assertIn(message, result.stdout + result.stderr)
 
-    def test_missing_cron_entry_is_reported_not_installed(self):
-        result, calls, _ = self.run_update(cron=False)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("No 10-minute cron entry", result.stderr)
-        self.assertEqual([c for c in calls if c.startswith("crontab")], ["crontab -l"])
+    def test_missing_old_or_disabled_cron_entry_is_reported_not_installed(self):
+        # install_crontab.sh wrote */30 before 2026-10-04; a disabled line does not run.
+        for cron in ("", "*/30", "# */10"):
+            with self.subTest(cron=cron):
+                result, calls, _ = self.run_update(cron=cron)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("No 10-minute cron entry", result.stderr)
+                self.assertNotIn("OK: cron", result.stdout)
+                self.assertEqual([c for c in calls if c.startswith("crontab")], ["crontab -l"])
 
 
 if __name__ == "__main__":
