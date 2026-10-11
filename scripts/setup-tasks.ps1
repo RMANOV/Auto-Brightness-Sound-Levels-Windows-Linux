@@ -1,5 +1,6 @@
 # Setup script — run once to create the new task architecture
-# Removes old wait-based tasks, creates planner + direct controller tasks
+# Removes old wait-based tasks, creates planner + direct controller tasks,
+# plus a 10-minute task between the sunrise/sunset runs
 
 # Remove old tasks
 Unregister-ScheduledTask -TaskName 'AdaptiveController-Sunrise' -Confirm:$false -ErrorAction SilentlyContinue
@@ -29,6 +30,11 @@ Write-Host "Created: AdaptiveController-Planner (daily 00:05)"
 # Run the planner now to create today's sunrise/sunset tasks
 Write-Host "Running planner for today..."
 & $plannerScript
+
+# Add the 10-minute task that runs between the sunrise/sunset runs, using the
+# controller built in this checkout (it may live outside %USERPROFILE%)
+& "$PSScriptRoot\setup-10min-task.ps1" `
+    -ControllerExe (Join-Path (Split-Path -Parent $PSScriptRoot) 'adaptive-rust\target\release\adaptive-controller.exe')
 
 # Show all tasks
 Write-Host ""

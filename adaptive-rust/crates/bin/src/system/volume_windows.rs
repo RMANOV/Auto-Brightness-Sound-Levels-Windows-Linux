@@ -13,9 +13,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info};
 
+/// Printed by the helper's `self-test`. Bump it, with `HELPER_FILE`, whenever
+/// the C# changes so an older cached build fails validation and is rebuilt.
+macro_rules! self_test_token {
+    () => {
+        "adaptive-volume-checked-v3"
+    };
+}
+const HELPER_FILE: &str = "volume_helper_checked_v3.exe";
+
 /// Embedded C# source for the volume helper executable.
 /// COM interfaces must declare ALL methods in vtable order (after IUnknown's 3).
-const VOLUME_HELPER_CS: &str = r#"
+const VOLUME_HELPER_CS: &str = concat!(
+    r#"
 using System;
 using System.Runtime.InteropServices;
 
@@ -87,7 +97,9 @@ class VolumeHelper {
         }
         // This validates the cached executable independently of endpoint availability.
         if (args[0] == "self-test") {
-            Console.WriteLine("adaptive-volume-checked-v3");
+            Console.WriteLine(""#,
+    self_test_token!(),
+    r#"");
             return 0;
         }
         try {
@@ -111,7 +123,8 @@ class VolumeHelper {
         return 0;
     }
 }
-"#;
+"#
+);
 
 pub struct VolumeControl {
     helper_path: PathBuf,
@@ -125,15 +138,12 @@ impl VolumeControl {
         // The v3 self-test distinguishes corrupt code from unavailable audio.
         // A working v2 cache remains untouched; v3 is compiled beside the final
         // destination and published only after successful compilation/self-test.
-        let exe_path = app_dir.join("volume_helper_checked_v3.exe");
+        let exe_path = app_dir.join(HELPER_FILE);
         ensure_helper(&exe_path, compile_helper, validate_helper, atomic_publish)?;
-
-        let control = Self {
+        // The caller's first get() confirms the endpoint; no extra helper launch here.
+        Ok(Self {
             helper_path: exe_path,
-        };
-        let current = control.get()?;
-        info!("Volume control ready (current: {}%)", current);
-        Ok(control)
+        })
     }
 
     pub fn get(&self) -> Result<i32> {
@@ -172,10 +182,10 @@ impl VolumeControl {
 }
 
 fn compile_helper(exe_path: &Path) -> Result<()> {
+    let csc = find_csc()?;
     info!("Compiling volume helper in private staging directory...");
     let cs_path = exe_path.with_extension("cs");
     std::fs::write(&cs_path, VOLUME_HELPER_CS)?;
-    let csc = find_csc()?;
     let status = Command::new(&csc)
         .args([
             &format!("/out:{}", exe_path.display()),
@@ -201,7 +211,7 @@ fn validate_helper(path: &Path) -> Result<()> {
         .context("Helper self-test could not launch")?;
     anyhow::ensure!(
         output.status.success()
-            && String::from_utf8_lossy(&output.stdout).trim() == "adaptive-volume-checked-v3",
+            && String::from_utf8_lossy(&output.stdout).trim() == self_test_token!(),
         "Invalid volume helper self-test"
     );
     Ok(())
@@ -215,9 +225,9 @@ mod tests {
         // Windows CI proves the embedded C# compile + non-device command. No get/set,
         // endpoint enumeration, controller launch, or device operation is performed.
         let temp = crate::system::helper_cache::BuildDirectory::new(&std::env::temp_dir()).unwrap();
-        let cache = temp.path().join("volume_helper_checked_v3.exe");
+        let cache = temp.path().join(HELPER_FILE);
         ensure_helper(&cache, compile_helper, validate_helper, atomic_publish).unwrap();
-        validate_helper(&cache).unwrap();
+        // Reuse only succeeds if the published build passes its self-test.
         ensure_helper(
             &cache,
             |_| panic!("valid executable should not recompile"),
@@ -225,8 +235,17 @@ mod tests {
             atomic_publish,
         )
         .unwrap();
+        // A corrupt cache is replaced; the real build stands in for a second csc run.
+        let built = temp.path().join("built.exe");
+        std::fs::copy(&cache, &built).unwrap();
         std::fs::write(&cache, b"interrupted old executable").unwrap();
-        ensure_helper(&cache, compile_helper, validate_helper, atomic_publish).unwrap();
+        ensure_helper(
+            &cache,
+            |candidate| Ok(std::fs::copy(&built, candidate).map(drop)?),
+            validate_helper,
+            atomic_publish,
+        )
+        .unwrap();
         validate_helper(&cache).unwrap();
     }
 }

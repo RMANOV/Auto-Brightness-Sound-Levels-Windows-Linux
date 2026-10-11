@@ -101,9 +101,7 @@ pub struct Controller {
     // Auto-exit convergence tracking
     last_target_brightness: Option<f32>,
     last_target_volume: Option<f32>,
-    converge_count: u32,
-    pending_brightness_sample: bool,
-    pending_audio_sample: bool,
+    convergence: Convergence,
 
     // Sun-aware seasonal adaptation
     sun_window: Option<SunWindow>,
@@ -181,9 +179,7 @@ impl Controller {
             start_time: Instant::now(),
             last_target_brightness: None,
             last_target_volume: None,
-            converge_count: 0,
-            pending_brightness_sample: false,
-            pending_audio_sample: false,
+            convergence: Convergence::default(),
             sun_window,
         })
     }
@@ -208,24 +204,19 @@ impl Controller {
         // Auto-exit convergence check (after warmup)
         if self.config.auto_exit
             && self.warmup_frame >= self.config.warmup_frames
-            && consume_convergence_sample(
-                &mut self.pending_brightness_sample,
-                &mut self.pending_audio_sample,
-                brightness_available,
-                fresh_brightness,
-                fresh_audio,
-            )
+            && self
+                .convergence
+                .step_ready(brightness_available, fresh_brightness, fresh_audio)
         {
             let b_ok = if let Some(reading) = self.brightness_control.get_readback()? {
                 self.current_brightness = reading.percent as f32;
-                confirmed_brightness_stable(true, reading, self.last_target_brightness)
+                confirmed_brightness_stable(reading, self.last_target_brightness)
             } else {
                 true // explicitly unavailable, never a measured/applied brightness
             };
             self.current_volume = self.volume_control.get()? as f32;
-            let v_ok = confirmed_volume_stable(true, self.current_volume, self.last_target_volume);
-            self.converge_count = advance_convergence_count(self.converge_count, true, b_ok, v_ok);
-            if self.converge_count >= 3 {
+            let v_ok = confirmed_volume_stable(self.current_volume, self.last_target_volume);
+            if self.convergence.record_step(b_ok && v_ok) {
                 let elapsed = self.start_time.elapsed().as_secs_f32();
                 let window_info = self
                     .sun_window
@@ -258,7 +249,7 @@ impl Controller {
         if !self.brightness_control.is_available() {
             return Ok(false);
         }
-        let latest = latest_brightness(&self.brightness_rx)?;
+        let latest = drain_latest(&self.brightness_rx, "camera")?;
         let fresh = latest.is_some();
         if let Some(frame_data) = latest {
             let camera_brightness = frame_data.brightness;
@@ -418,7 +409,7 @@ fn camera_worker(tx: Sender<FrameData>, shutdown: Arc<Mutex<bool>>) {
         #[cfg(target_os = "linux")]
         thread::sleep(Duration::from_millis(100));
         #[cfg(target_os = "windows")]
-        thread::sleep(Duration::from_secs(2));
+        pause_unless_shutdown(&shutdown, Duration::from_secs(2));
     }
 
     info!("Camera worker stopped");
@@ -454,10 +445,24 @@ fn audio_worker(tx: Sender<AudioData>, shutdown: Arc<Mutex<bool>>) {
             }
         }
         // Microphone OFF for 5 seconds between samples
-        thread::sleep(Duration::from_secs(5));
+        pause_unless_shutdown(&shutdown, Duration::from_secs(5));
     }
 
     info!("Audio worker stopped");
+}
+
+/// Sleeps for `duration`, waking within 100ms of a shutdown request so cleanup
+/// never waits out a whole capture interval. Convergence is decided right after
+/// an audio sample, i.e. at the start of the audio worker's longest pause.
+fn pause_unless_shutdown(shutdown: &Mutex<bool>, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while !*shutdown.lock() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
 }
 
 /// Detect current sun window using hardcoded Sofia coordinates + NOAA algorithm
@@ -525,39 +530,24 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (year as i32, m as u32, d as u32)
 }
 
-fn latest_brightness(rx: &Receiver<FrameData>) -> Result<Option<FrameData>> {
-    let mut latest: Option<FrameData> = None;
+/// Takes the newest queued sample. A disconnected required channel is an error
+/// once its queue is empty, while an ordinarily empty live channel is a valid poll.
+fn drain_latest<T>(rx: &Receiver<T>, channel: &str) -> Result<Option<T>> {
+    let mut latest = None;
     loop {
         match rx.try_recv() {
             Ok(data) => latest = Some(data),
-            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Empty) => return Ok(latest),
+            Err(TryRecvError::Disconnected) if latest.is_some() => return Ok(latest),
             Err(TryRecvError::Disconnected) => {
-                if latest.is_none() {
-                    anyhow::bail!("Required camera channel disconnected");
-                }
-                break;
+                anyhow::bail!("Required {channel} channel disconnected")
             }
         }
     }
-
-    Ok(latest)
 }
 
 fn latest_audio(rx: &Receiver<AudioData>) -> Result<Option<AudioData>> {
-    let mut latest: Option<AudioData> = None;
-    loop {
-        match rx.try_recv() {
-            Ok(data) => latest = Some(data),
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => {
-                if latest.is_none() {
-                    anyhow::bail!("Required audio channel disconnected");
-                }
-                break;
-            }
-        }
-    }
-
+    let latest = drain_latest(rx, "audio")?;
     if let Some(data) = &latest {
         anyhow::ensure!(
             data.noise_level.is_finite() && data.noise_level >= 0.0,
@@ -567,63 +557,50 @@ fn latest_audio(rx: &Receiver<AudioData>) -> Result<Option<AudioData>> {
     Ok(latest)
 }
 
-fn advance_convergence_count(count: u32, fresh: bool, brightness_ok: bool, volume_ok: bool) -> u32 {
-    if !fresh {
-        return count;
-    }
-    if brightness_ok && volume_ok {
-        count + 1
-    } else {
-        0
-    }
-}
-
-fn confirmed_brightness_stable(
-    fresh: bool,
-    actual: BrightnessReadback,
-    target: Option<f32>,
-) -> bool {
-    fresh && target.map_or(false, |t| actual.matches_target(t))
-}
-
-fn convergence_sample_ready(
-    brightness_available: bool,
-    fresh_brightness: bool,
+/// Auto-exit counts measured stability steps, not poll ticks. Camera and audio
+/// arrive on independent cadences, so fresh evidence accumulates across polls and
+/// each step consumes it once: no stream can advance the count on a stale sample.
+#[derive(Default)]
+struct Convergence {
+    fresh_camera: bool,
     fresh_audio: bool,
-) -> bool {
-    if brightness_available {
-        fresh_brightness && fresh_audio
-    } else {
-        fresh_audio
+    stable_steps: u32,
+}
+
+impl Convergence {
+    /// Records this poll's samples; true when every required stream has new evidence.
+    fn step_ready(
+        &mut self,
+        brightness_available: bool,
+        fresh_camera: bool,
+        fresh_audio: bool,
+    ) -> bool {
+        self.fresh_camera |= fresh_camera;
+        self.fresh_audio |= fresh_audio;
+        let ready = self.fresh_audio && (self.fresh_camera || !brightness_available);
+        if ready {
+            self.fresh_camera = false;
+            self.fresh_audio = false;
+        }
+        ready
+    }
+
+    /// Scores a ready step; any mismatch restarts the count. True once converged.
+    fn record_step(&mut self, stable: bool) -> bool {
+        self.stable_steps = if stable { self.stable_steps + 1 } else { 0 };
+        self.stable_steps >= 3
     }
 }
 
-// Consume independent sample cadences exactly once per stability step.
-// Neither stream can keep advancing convergence on one stale-ever sample.
-fn consume_convergence_sample(
-    pending_brightness: &mut bool,
-    pending_audio: &mut bool,
-    brightness_available: bool,
-    fresh_brightness: bool,
-    fresh_audio: bool,
-) -> bool {
-    *pending_brightness |= fresh_brightness;
-    *pending_audio |= fresh_audio;
-    if !convergence_sample_ready(brightness_available, *pending_brightness, *pending_audio) {
-        return false;
-    }
-    *pending_brightness = false;
-    *pending_audio = false;
-    true
+fn confirmed_brightness_stable(actual: BrightnessReadback, target: Option<f32>) -> bool {
+    target.is_some_and(|t| actual.matches_target(t))
 }
 
-fn confirmed_volume_stable(fresh: bool, actual: f32, target: Option<f32>) -> bool {
-    fresh
-        && actual.is_finite()
+fn confirmed_volume_stable(actual: f32, target: Option<f32>) -> bool {
+    actual.is_finite()
         && (0.0..=100.0).contains(&actual)
-        && target.map_or(false, |t| {
-            t.is_finite() && (actual - t.round().clamp(0.0, 100.0)).abs() <= 1.0
-        })
+        && target
+            .is_some_and(|t| t.is_finite() && (actual - t.round().clamp(0.0, 100.0)).abs() <= 1.0)
 }
 
 #[cfg(target_os = "linux")]
@@ -658,24 +635,10 @@ mod restoration_tests {
         }
     }
     #[test]
-    fn supported_brightness_cannot_count_without_audio_evidence() {
-        assert!(!convergence_sample_ready(true, true, false));
-    }
-    #[test]
-    fn required_audio_disconnect_is_an_error_after_queued_sample() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        assert!(latest_audio(&rx).unwrap().is_none());
-        tx.send(AudioData { noise_level: 0.001 }).unwrap();
-        drop(tx);
-        assert_eq!(latest_audio(&rx).unwrap().unwrap().noise_level, 0.001);
-        assert!(latest_audio(&rx).is_err());
-    }
-    #[test]
-    fn independent_camera_audio_cadences_require_new_evidence_each_step() {
-        let (mut camera, mut audio) = (false, false);
-        let mut count = 0;
+    fn supported_brightness_needs_fresh_camera_and_audio_each_step() {
+        let mut convergence = Convergence::default();
         // Disjoint polls, including the Windows 2s camera / 5s audio phases.
-        for (c, a) in [
+        let ready: Vec<bool> = [
             (true, false),
             (false, true),
             (true, false),
@@ -683,147 +646,93 @@ mod restoration_tests {
             (false, true),
             (false, true),
             (true, false),
-        ] {
-            let ready = consume_convergence_sample(&mut camera, &mut audio, true, c, a);
-            count = advance_convergence_count(
-                count,
-                ready,
-                true,
-                confirmed_volume_stable(ready, 25.0, Some(25.0)),
-            );
-        }
-        assert_eq!(count, 3);
+        ]
+        .into_iter()
+        .map(|(camera, audio)| convergence.step_ready(true, camera, audio))
+        .collect();
+        assert_eq!(ready, [false, true, false, false, true, false, true]);
+        // A camera stream alone never makes a step; the next audio sample does.
         for _ in 0..20 {
-            assert!(!consume_convergence_sample(
-                &mut camera,
-                &mut audio,
-                true,
-                true,
-                false
-            ));
+            assert!(!convergence.step_ready(true, true, false));
         }
-        assert!(consume_convergence_sample(
-            &mut camera,
-            &mut audio,
-            true,
-            false,
-            true
-        ));
-        assert_eq!(
-            advance_convergence_count(
-                2,
-                true,
-                true,
-                confirmed_volume_stable(true, 50.0, Some(25.0))
-            ),
-            0
-        );
-        assert!(!consume_convergence_sample(
-            &mut camera,
-            &mut audio,
-            true,
-            false,
-            true
-        ));
-        assert!(!confirmed_volume_stable(true, 25.0, None));
+        assert!(convergence.step_ready(true, false, true));
+        assert!(!convergence.step_ready(true, false, true));
     }
     #[test]
-    fn invalid_audio_measurement_is_not_a_target() {
-        for noise_level in [f32::NAN, f32::INFINITY, -0.001] {
-            let (tx, rx) = crossbeam_channel::unbounded();
-            tx.send(AudioData { noise_level }).unwrap();
-            assert!(latest_audio(&rx).is_err());
-        }
+    fn unavailable_brightness_steps_on_fresh_audio_alone() {
+        let mut convergence = Convergence::default();
+        let ready: Vec<bool> = [true, false, false, true, false, true]
+            .into_iter()
+            .map(|audio| convergence.step_ready(false, true, audio))
+            .collect();
+        assert_eq!(ready, [true, false, false, true, false, true]);
+    }
+    #[test]
+    fn convergence_needs_three_consecutive_stable_steps() {
+        let mut convergence = Convergence::default();
+        let converged: Vec<bool> = [true, true, false, true, true, true]
+            .into_iter()
+            .map(|stable| convergence.record_step(stable))
+            .collect();
+        assert_eq!(converged, [false, false, false, false, false, true]);
     }
     #[test]
     fn desired_stability_without_measured_application_is_not_convergence() {
+        assert!(confirmed_brightness_stable(reading(30.0), Some(30.0)));
+        assert!(!confirmed_brightness_stable(reading(80.0), Some(30.0)));
+        assert!(!confirmed_brightness_stable(reading(f32::NAN), Some(30.0)));
         assert!(!confirmed_brightness_stable(
-            true,
-            reading(80.0),
-            Some(30.0)
-        ));
-        assert!(confirmed_brightness_stable(true, reading(30.0), Some(30.0)));
-        assert!(!confirmed_brightness_stable(
-            false,
-            reading(30.0),
-            Some(30.0)
-        ));
-        assert!(!confirmed_brightness_stable(
-            true,
-            reading(f32::NAN),
-            Some(30.0)
-        ));
-        assert!(!confirmed_brightness_stable(
-            true,
             reading(30.0),
             Some(f32::INFINITY)
         ));
+        assert!(!confirmed_brightness_stable(reading(30.0), None));
     }
     #[test]
-    fn convergence_counts_samples_not_empty_poll_ticks() {
-        let mut count = 0;
-        for fresh in [true, false, false, false, true, false, false, false, true] {
-            let stable = confirmed_brightness_stable(fresh, reading(30.0), Some(30.0));
-            count = advance_convergence_count(count, fresh, stable, true);
-        }
-        assert_eq!(count, 3);
-        assert_eq!(advance_convergence_count(0, false, false, true), 0);
-        assert_eq!(advance_convergence_count(2, true, false, true), 0);
-        assert_eq!(advance_convergence_count(2, true, true, false), 0);
-    }
-
-    #[test]
-    fn unavailable_brightness_converges_only_on_fresh_confirmed_audio() {
-        let mut count = 0;
-        for fresh_audio in [true, false, false, true, false, true] {
-            let fresh = convergence_sample_ready(false, true, fresh_audio);
-            let stable = confirmed_volume_stable(fresh_audio, 25.0, Some(25.4));
-            count = advance_convergence_count(count, fresh, true, stable);
-        }
-        assert_eq!(count, 3);
-        assert!(!convergence_sample_ready(false, true, false));
-        assert!(!confirmed_volume_stable(true, 50.0, None));
-        assert!(!confirmed_volume_stable(false, 25.0, Some(25.0)));
-        assert!(!confirmed_volume_stable(true, 50.0, Some(25.0)));
-        assert!(!confirmed_volume_stable(true, f32::NAN, Some(25.0)));
-        assert!(!confirmed_volume_stable(true, 25.0, Some(f32::NAN)));
-        assert_eq!(advance_convergence_count(2, true, true, false), 0);
-        assert!(!convergence_sample_ready(true, true, false));
-        assert!(!convergence_sample_ready(true, false, true));
+    fn volume_stability_needs_finite_readback_matching_a_present_target() {
+        assert!(confirmed_volume_stable(25.0, Some(25.4)));
+        assert!(!confirmed_volume_stable(25.0, None));
+        assert!(!confirmed_volume_stable(50.0, Some(25.0)));
+        assert!(!confirmed_volume_stable(f32::NAN, Some(25.0)));
+        assert!(!confirmed_volume_stable(25.0, Some(f32::NAN)));
     }
     #[test]
     fn coarse_backlight_reaches_convergence_but_a_missed_write_does_not() {
-        let reading = BrightnessReadback {
+        let coarse = BrightnessReadback {
             percent: 100.0 / 3.0,
             step_percent: 100.0 / 9.0,
         };
-        let stable = confirmed_brightness_stable(true, reading, Some(30.4));
-        let mut count = 0;
-        for _ in 0..3 {
-            count = advance_convergence_count(count, true, stable, true);
-        }
-        assert_eq!(count, 3);
+        assert!(confirmed_brightness_stable(coarse, Some(30.4)));
         let mismatch = BrightnessReadback {
             percent: 500.0 / 9.0,
             step_percent: 100.0 / 9.0,
         };
-        assert!(!confirmed_brightness_stable(true, mismatch, Some(30.4)));
-        assert_eq!(advance_convergence_count(count, true, false, true), 0);
+        assert!(!confirmed_brightness_stable(mismatch, Some(30.4)));
     }
     #[test]
-    fn required_camera_disconnect_is_an_error_not_an_empty_poll() {
+    fn required_channel_disconnect_is_an_error_after_queued_samples() {
         let (tx, rx) = bounded(2);
-        assert!(latest_brightness(&rx).unwrap().is_none());
-        drop(tx);
-        assert!(latest_brightness(&rx).is_err());
-    }
-    #[test]
-    fn queued_camera_frame_is_consumed_then_disconnect_surfaces() {
-        let (tx, rx) = bounded(2);
+        assert!(drain_latest(&rx, "camera").unwrap().is_none());
+        tx.send(FrameData { brightness: 10.0 }).unwrap();
         tx.send(FrameData { brightness: 20.0 }).unwrap();
         drop(tx);
-        assert_eq!(latest_brightness(&rx).unwrap().unwrap().brightness, 20.0);
-        assert!(latest_brightness(&rx).is_err());
+        assert_eq!(
+            drain_latest(&rx, "camera").unwrap().unwrap().brightness,
+            20.0
+        );
+        assert!(drain_latest(&rx, "camera").is_err());
+    }
+    #[test]
+    fn invalid_audio_measurement_is_not_a_target() {
+        for (noise_level, valid) in [
+            (0.001, true),
+            (f32::NAN, false),
+            (f32::INFINITY, false),
+            (-0.001, false),
+        ] {
+            let (tx, rx) = bounded(1);
+            tx.send(AudioData { noise_level }).unwrap();
+            assert_eq!(latest_audio(&rx).is_ok(), valid, "{noise_level}");
+        }
     }
 
     #[cfg(target_os = "linux")]

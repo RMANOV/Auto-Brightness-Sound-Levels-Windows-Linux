@@ -72,17 +72,16 @@ def announce(role):
         stream.write(json.dumps(record) + "\n")
 
 announce("backend")
-if mode == "complete":
-    print("Converged in 0.0s", flush=True)
-    sys.exit(0)
 if mode == "restart":
     try:
         fd = os.open(os.environ["TEST_FIRST_LAUNCH"], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
     except FileExistsError:
-        print("Converged in 0.0s", flush=True)
-        sys.exit(0)
-elif mode == "ignore":
+        mode = "complete"  # The second launch completes.
+if mode == "complete":
+    print("Converged in 0.0s", flush=True)
+    sys.exit(0)
+if mode == "ignore":
     child_source = "\n".join([
         "import json, os, signal, time",
         "from pathlib import Path",

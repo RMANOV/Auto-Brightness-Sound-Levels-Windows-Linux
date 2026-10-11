@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -48,39 +49,36 @@ cp -- "$1" "$TEST_CRONTAB_STATE"
         result = subprocess.run(["bash", str(checkout / "install_crontab.sh")],
                                 cwd=root, env=env, text=True, capture_output=True,
                                 timeout=4)
-        return root, checkout, current, calls, backend_called, scratch, result
+        return SimpleNamespace(checkout=checkout, binary=binary, current=current, calls=calls,
+                               invoked=backend_called, scratch=scratch, result=result)
 
-    def assert_prerequisite_rejected(self, backend):
-        _, checkout, current, calls, invoked, scratch, result = self.fixture(backend)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(calls.exists(), "Installer reached crontab despite missing prerequisite")
-        self.assertEqual(current.read_text(), "# EXISTING FIXTURE CRONTAB\n")
-        self.assertFalse(invoked.exists(), "Prerequisite validation executed the backend")
-        self.assertEqual(list(scratch.iterdir()), [])
-        self.assertIn(str(checkout / "adaptive-rust/target/release/adaptive-controller"), result.stderr)
-        self.assertIn("cargo build --release -p adaptive-controller --locked", result.stderr)
-        self.assertNotIn("Crontab installed successfully", result.stdout)
-
-    def test_missing_backend_aborts_before_crontab_write(self):
-        self.assert_prerequisite_rejected("missing")
-
-    def test_nonexecutable_backend_aborts_before_crontab_write(self):
-        self.assert_prerequisite_rejected("nonexecutable")
-
-    def test_directory_is_not_an_executable_backend(self):
-        self.assert_prerequisite_rejected("directory")
+    def test_missing_nonexecutable_or_directory_backend_aborts_before_crontab_write(self):
+        for backend in ("missing", "nonexecutable", "directory"):
+            with self.subTest(backend=backend):
+                run = self.fixture(backend)
+                result = run.result
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(run.calls.exists(),
+                                 "Installer reached crontab despite missing prerequisite")
+                self.assertEqual(run.current.read_text(), "# EXISTING FIXTURE CRONTAB\n")
+                self.assertFalse(run.invoked.exists(), "Prerequisite validation executed the backend")
+                self.assertEqual(list(run.scratch.iterdir()), [])
+                self.assertIn(str(run.binary), result.stderr)
+                self.assertIn("cargo build --release -p adaptive-controller --locked", result.stderr)
+                self.assertNotIn("Crontab installed successfully", result.stdout)
 
     def test_available_backend_preserves_existing_install_route(self):
-        _, checkout, current, calls, invoked, scratch, result = self.fixture("executable")
+        run = self.fixture("executable")
+        result = run.result
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        arguments = calls.read_text().splitlines()
+        arguments = run.calls.read_text().splitlines()
         self.assertEqual(arguments[0], "1")
         self.assertEqual(len(arguments), 2)
         self.assertFalse(Path(arguments[1]).exists(), "Temporary crontab was not removed")
-        self.assertFalse(invoked.exists(), "Installation must not run the hardware backend")
-        self.assertEqual(list(scratch.iterdir()), [])
-        installed = current.read_text()
-        manager = checkout / "adaptive_controller_manager.sh"
+        self.assertFalse(run.invoked.exists(), "Installation must not run the hardware backend")
+        self.assertEqual(list(run.scratch.iterdir()), [])
+        installed = run.current.read_text()
+        manager = run.checkout / "adaptive_controller_manager.sh"
         self.assertIn(f'*/10 * * * * DISPLAY=:0 "{manager}" check', installed)
         self.assertIn(f'0 3 * * * DISPLAY=:0 "{manager}" restart', installed)
         self.assertNotIn("EXISTING FIXTURE CRONTAB", installed)

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Intelligent Cron Installation Script for Adaptive Controller
-# Optimized for 5-minute intervals based on mathematical analysis
+# 10-minute checks: sunrise/sunset windows plus the periods between them
 # Energy efficient for Fedora 42 laptop systems
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,9 +26,9 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # Adaptive Brightness & Volume Controller - Sunrise/Sunset Intelligent Scheduling
 # Optimized for minimal system impact and optimal user experience
 # 
-# New sunrise/sunset approach with dynamic time windows and flash detection:
-# - ONLY activates during sunrise/sunset periods (30min before, 2h after each event)
-# - 10-minute intervals: ~90% energy savings vs continuous running
+# Sunrise/sunset windows plus 10-minute periods between them, with flash detection:
+# - Sunrise/sunset windows (30min before, 2h after each event) are kept
+# - Between the windows the same 10-minute check also runs, all day
 # - Dynamic time windows: Automatically adjusts with seasonal changes
 # - Optimized flash detection: 40s total wait (35s warmup + 5s buffer)
 # - Only activates on >40% environmental changes using saved state comparison
@@ -39,7 +39,7 @@ cat >> "$TEMP_CRONTAB" << 'EOF'
 # - Fallback protection: Reverts to time-based logic if sunrise/sunset calculation fails
 #
 # Schedule breakdown:
-# */10 * * * * - Check if in sunrise/sunset window (30min before, 2h after) + flash detection + burst mode (8min if needed)
+# */10 * * * * - Sunrise/sunset window or 10-minute period between them + flash detection + burst mode (8min if needed)
 # 0 3 * * * - Daily cleanup at 3 AM (between sunrise/sunset windows)
 # 0 6 * * 1 - Weekly log maintenance on Monday 6 AM
 
@@ -78,8 +78,9 @@ echo "  🧹 Daily cleanup:   3:00 AM (deep night mode)"
 echo "  📝 Log maintenance: Monday 6:00 AM"
 echo ""
 echo "🎯 Key Features:"
-echo "  🌅 Sunrise/sunset activation: 30min before to 2h after each event"
-echo "  ⚡ ~90% energy savings vs continuous running (even better than before!)"
+echo "  🌅 Sunrise/sunset windows: 30min before to 2h after each event"
+echo "  ⏱️  Between windows:  the same check every 10 minutes, all day"
+echo "  ⚡ Low energy use: a short camera probe each check, full run only on change"
 echo "  🧠 Flash detection: Only activates on >40% environmental changes"
 echo "  🗺️  Geographic accuracy: Calculates exact sunrise/sunset times for your location"
 echo "  📅 Seasonal adaptation: Windows automatically adjust as days get longer/shorter"
@@ -91,11 +92,11 @@ echo "  🛡️ Fallback protection: Reverts to time-based logic if calculation 
 echo "  📈 Professional logging with minimal system footprint"
 echo ""
 echo "📊 Real-World Optimization Results:"
-echo "  🔋 Energy savings: ~90% vs continuous running (sunrise/sunset windows only!)"
-echo "  ⏱️  Response time: Only during 30min-2h light transition periods with >40% changes"
+echo "  🔋 Energy use: short camera probe every 10 minutes, full run only on change"
+echo "  ⏱️  Response time: within 10 minutes of a >40% light change, at any hour"
 echo "  🖥️  UX Impact: Eliminated flickering and fan noise"
 echo "  🌅 Intelligent timing: Perfect synchronization with natural light cycles"
-echo "  🚀 System load: Minimal - activation only during optimized sunrise/sunset windows"
+echo "  🚀 System load: Minimal - full activation only on real light changes"
 echo "  🧹 Zero browser lag: Comprehensive resource cleanup after each run"
 echo "  🛡️ Robust termination: Clean exit on timeout, interrupt, or normal completion"
 echo "  🗺️  Location aware: Automatically detects or estimates your geographic coordinates"
@@ -107,4 +108,4 @@ echo "To check controller status:"
 echo "  ./adaptive_controller_manager.sh status"
 echo ""
 echo "To view logs:"
-echo "  tail -f /tmp/adaptive_controller.log"
+echo "  tail -f \"\${XDG_STATE_HOME:-\$HOME/.local/state}/adaptive-controller/controller.log\""

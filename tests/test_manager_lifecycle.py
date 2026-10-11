@@ -70,7 +70,7 @@ start_controller true
         self.assertTrue(state)
 
     def test_failure_no_convergence_and_timeout_preserve_reference(self):
-        for body, timeout, expected in [('exit 7', '3s', 7), ('exit 0', '3s', 2),
+        for body, timeout, expected in [('exit 7', '3s', 7), ('exit 0', '3s', 2), ('exit 1', '3s', 2),
                                         ('echo "Converged in .0s"; sleep 2', '.1s', 124)]:
             with self.subTest(body=body):
                 rc, log, state, errors = self.run_controller(body, timeout)

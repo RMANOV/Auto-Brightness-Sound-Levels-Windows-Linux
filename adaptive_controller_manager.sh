@@ -176,24 +176,23 @@ flash_detection_check() {
     return 1
 }
 
-# Function to determine if we should be active based on sunrise/sunset times
+# Sunrise/sunset windows stay; between them every 10-minute cron check also
+# runs, so the ambient probe can adapt brightness at any hour.
 should_be_active() {
     # First check if we're in a sunrise/sunset activation window
     local sunrise_sunset_status
     local window_type
     
     # Call the sunrise/sunset calculator
-    local calculator_output
+    local calculator_output calculator_rc
     calculator_output=$("$SCRIPT_DIR/sunrise_sunset_calculator.py" --check-active 2>/dev/null)
-    
-    if [[ $? -eq 0 && -n "$calculator_output" ]]; then
-        if [[ "$calculator_output" == "ACTIVE:"* ]]; then
-            window_type=$(echo "$calculator_output" | cut -d':' -f2)
-            log_message "Sunrise/sunset window: Currently in $window_type activation window"
-        else
-            log_message "Sunrise/sunset window: Outside activation windows - skipping"
-            return 1  # Outside sunrise/sunset activation windows
-        fi
+    calculator_rc=$?
+
+    if [[ $calculator_rc -eq 0 && "$calculator_output" == "ACTIVE:"* ]]; then
+        window_type=$(echo "$calculator_output" | cut -d':' -f2)
+        log_message "Sunrise/sunset window: Currently in $window_type activation window"
+    elif [[ $calculator_rc -eq 0 && "$calculator_output" == "INACTIVE" ]]; then
+        log_message "Sunrise/sunset window: Between activation windows - 10-minute period check"
     else
         log_message "Schedule ERROR: sunrise/sunset calculation unavailable"
         return 2
@@ -256,13 +255,9 @@ start_controller() {
         log_message "System resources unavailable; adjustment deferred"
         return 1
     fi
-    # Main holds the exclusive guard, and no validated controller is running.
-    # A leftover PID can belong to an unrelated process after PID reuse.
-    rm -f "$LOCK_FILE" || return 2
-    if ! (set -C; echo $$ > "$LOCK_FILE") 2>/dev/null; then
-        log_message "Another instance is starting (lock file exists)"
-        return 1
-    fi
+    # Main holds the exclusive guard, and no validated controller is running, so
+    # any lock left here is stale; its PID can belong to an unrelated process.
+    { rm -f "$LOCK_FILE" && echo $$ > "$LOCK_FILE"; } 2>/dev/null || return 2
     OWNED_LOCK=true
     if [[ "$USE_RUST" != "true" || ! -x "$RUST_BINARY" ]]; then
         log_message "Controller ERROR: verified Linux Rust backend is unavailable"
@@ -289,7 +284,8 @@ start_controller() {
     cleanup_owned_controller
     if [[ "$converged" != "true" ]]; then
         log_message "Controller ERROR: no confirmed convergence (exit $exit_code)"
-        [[ "$exit_code" -eq 0 ]] && return 2
+        # Exit 1 is the manager's policy-skip code; a failed run must not look like one.
+        [[ "$exit_code" -le 1 ]] && return 2
         return "$exit_code"
     fi
     if [[ -z "$PROBE_FILE" ]] || ! command python3 "$SCRIPT_DIR/camera_probe.py" --state "$AMBIENT_STATE" --accept "$PROBE_FILE" >> "$LOG_FILE" 2>&1; then
