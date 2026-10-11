@@ -1,6 +1,7 @@
 //! One controller per logon session on Windows. The sunrise/sunset tasks and the
 //! 10-minute task can start together; a later run exits instead of fighting the
-//! first over brightness and volume. The OS closes the handle if a run is killed.
+//! first over brightness and volume. The handle is released when the controller
+//! process exits; scheduled runs pass --max-runtime-secs so a stuck run exits too.
 use anyhow::{Context, Result};
 use std::ffi::c_void;
 

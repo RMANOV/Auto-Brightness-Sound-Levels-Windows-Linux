@@ -70,20 +70,23 @@ jobs:
           $refused = $false
           try { & .\scripts\setup-10min-task.ps1 -ControllerExe 'C:\missing\adaptive-controller.exe' -TaskName $name } catch { $refused = $true }
           if (-not $refused -or (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw 'A missing controller must not register a task' }
-          $exe = "$env:SystemRoot\System32\whoami.exe"
-          & .\scripts\setup-10min-task.ps1 -ControllerExe $exe -TaskName $name
+          # A relative controller path must be stored absolute: the task starts in System32.
+          $exe = Join-Path (Get-Location).Path 'ci-controller.exe'
+          Copy-Item -LiteralPath "$env:SystemRoot\System32\whoami.exe" -Destination $exe
+          & .\scripts\setup-10min-task.ps1 -ControllerExe '.\ci-controller.exe' -TaskName $name
           try {
             $task = Get-ScheduledTask -TaskName $name
             $repeat = $task.Triggers[0].Repetition
             if ($repeat.Interval -ne 'PT10M' -or $repeat.Duration -ne 'P1D') { throw "Unexpected repetition: $($repeat.Interval) / $($repeat.Duration)" }
             $action = $task.Actions[0]
-            if ($action.Execute -notlike '*\System32\conhost.exe' -or $action.Arguments -ne "--headless `"$exe`"") { throw "Unexpected action: $($action.Execute) $($action.Arguments)" }
+            if ($action.Execute -notlike '*\System32\conhost.exe' -or $action.Arguments -ne "--headless `"$exe`" --max-runtime-secs 480") { throw "Unexpected action: $($action.Execute) $($action.Arguments)" }
             if ("$($task.Settings.MultipleInstances)" -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT9M') { throw "Unexpected settings: $($task.Settings.MultipleInstances) $($task.Settings.ExecutionTimeLimit)" }
           } finally {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
           }
-          # The hidden launcher must actually run the program and return.
+          # The hidden launcher must run the program, pass the run-limit flag through, and return.
           $marker = Join-Path $env:RUNNER_TEMP 'headless-ran.txt'
-          $launcher = Start-Process -FilePath "$env:SystemRoot\System32\conhost.exe" -ArgumentList '--headless', 'cmd.exe', '/c', "echo ok> `"$marker`"" -PassThru
+          $launcher = Start-Process -FilePath "$env:SystemRoot\System32\conhost.exe" -ArgumentList '--headless', 'cmd.exe', '/c', "echo --max-runtime-secs 480 > `"$marker`"" -PassThru
           if (-not $launcher.WaitForExit(30000)) { $launcher.Kill(); throw 'conhost --headless did not return' }
           if (-not (Test-Path -LiteralPath $marker)) { throw 'conhost --headless did not run the program' }
+          if ((Get-Content -LiteralPath $marker -Raw) -notlike '*--max-runtime-secs 480*') { throw "conhost did not pass arguments: $(Get-Content -LiteralPath $marker -Raw)" }

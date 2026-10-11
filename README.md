@@ -77,7 +77,7 @@ tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/adaptive-controller/controller.lo
 ```
 
 **🌅 Sunrise/Sunset Optimization:** The system uses **intelligent sunrise/sunset scheduling with geographic awareness** for optimal energy efficiency:
-- **Every 10 minutes, all day** - sunrise/sunset windows plus 10-minute checks between them; a check is a short camera probe, and a full adjustment runs only on a real light change
+- **Every 10 minutes, all day** - sunrise/sunset windows plus 10-minute checks between them; on Linux a check is a short camera probe, and a full adjustment runs only on a real light change
 - **Dynamic activation windows** - 30min before to 2h after each sunrise/sunset (automatically calculated for your location)
 - **Geographic intelligence** - auto-detects coordinates or uses manual configuration
 - **Seasonal adaptation** - windows automatically adjust as days get longer/shorter
@@ -85,7 +85,7 @@ tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/adaptive-controller/controller.lo
 - **Eliminates unnecessary activations** - no adjustment while the light stays within the threshold
 - **Schedule errors** - defer adjustment when sunrise/sunset calculation fails
 
-**🪟 Windows (Task Scheduler):** `scripts\setup-tasks.ps1` creates the daily planner and the sunrise/sunset tasks, plus a hidden task every 10 minutes between them (`scripts\setup-10min-task.ps1`, which can also be run on its own). Only one controller runs at a time: a run that starts while another is active exits at once.
+**🪟 Windows (Task Scheduler):** `scripts\setup-tasks.ps1` creates the daily planner and the sunrise/sunset tasks, plus a hidden task every 10 minutes between them (`scripts\setup-10min-task.ps1`, which can also be run on its own). Windows has no camera probe or >40% gate: each 10-minute run is a full adjustment (about a minute) from the sun-position model, so manual brightness/volume changes are re-adapted at the next run. Only one controller runs at a time: a run that starts while another is active exits at once, and a 10-minute run ends itself after 8 minutes.
 
 ## 🔥 Technical Achievements
 
@@ -138,12 +138,12 @@ Noise filtering and normalization
 
 🌅 **Sunrise/Sunset Intelligent Scheduling System**:
 - **Geographic Time Windows**: 30min before to 2h after sunrise/sunset, plus 10-minute checks between them
-- **Low Energy Use**: between adjustments only a short camera probe runs every 10 minutes
+- **Low Energy Use**: on Linux, between adjustments only a short camera probe runs every 10 minutes
 - **NOAA Astronomical Calculations**: Pure Python implementation for accurate sunrise/sunset times
 - **Location Auto-Detection**: Automatically detects coordinates from timezone or manual config
 - **Seasonal Adaptation**: Windows automatically adjust as days get longer/shorter throughout year
 - **Ambient Change Detection**: Short camera probe compared with the last confirmed ambient baseline (>40% threshold)
-- **Eliminates Unnecessary Activations**: Full adjustment only when ambient light changed by more than 40%
+- **Eliminates Unnecessary Activations**: on Linux, full adjustment only when ambient light changed by more than 40%
 - **Schedule Error Handling**: Defers adjustment if astronomical calculations fail
 - **Comprehensive Resource Cleanup**: Automatic cleanup after each 8-minute burst mode
 - **Signal-Aware Termination**: Proper cleanup on timeout, interruption, or normal exit
@@ -207,12 +207,12 @@ require testing on the actual devices.
 
 🦀 **Rust-powered performance** - 2-4x faster than Numba JIT, 4x lower memory footprint
 ✨ **Significantly improved user comfort** and productivity through intelligent adaptation
-🌅 **Low energy use** - sunrise/sunset windows plus 10-minute checks, full runs only on real light changes  
+🌅 **Low energy use** - sunrise/sunset windows plus 10-minute checks; on Linux, full runs only on real light changes  
 🗺️ **Location-aware operation** with automatic coordinate detection and seasonal adaptation  
 🤖 **Autonomous operation** with reliable saved state comparison and minimal system impact  
 🖥️ **Enhanced display and audio experience** with eliminated taskbar flickering and fan noise  
 💻 **Professional system integration** synchronized with natural light cycles  
-📱 **Battery-friendly** - between adjustments only a short camera probe every 10 minutes  
+📱 **Battery-friendly** - on Linux, between adjustments only a short camera probe every 10 minutes  
 🌞 **Perfect timing synchronization** with sunrise and sunset events for optimal UX  
 🔍 **Intelligent activation filtering** - only operates during meaningful light change periods  
 🧹 **Zero system lag** through comprehensive resource cleanup eliminating browser and performance degradation  
