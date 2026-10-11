@@ -31,8 +31,10 @@ Write-Host "Created: AdaptiveController-Planner (daily 00:05)"
 Write-Host "Running planner for today..."
 & $plannerScript
 
-# Add the 10-minute task that runs between the sunrise/sunset runs
-& "$PSScriptRoot\setup-10min-task.ps1"
+# Add the 10-minute task that runs between the sunrise/sunset runs, using the
+# controller built in this checkout (it may live outside %USERPROFILE%)
+& "$PSScriptRoot\setup-10min-task.ps1" `
+    -ControllerExe (Join-Path (Split-Path -Parent $PSScriptRoot) 'adaptive-rust\target\release\adaptive-controller.exe')
 
 # Show all tasks
 Write-Host ""

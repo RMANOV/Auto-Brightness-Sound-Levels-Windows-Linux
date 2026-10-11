@@ -87,6 +87,14 @@ tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/adaptive-controller/controller.lo
 
 **🪟 Windows (Task Scheduler):** `scripts\setup-tasks.ps1` creates the daily planner and the sunrise/sunset tasks, plus a hidden task every 10 minutes between them (`scripts\setup-10min-task.ps1`, which can also be run on its own). Windows has no camera probe or >40% gate: each 10-minute run is a full adjustment (about a minute) from the sun-position model, so manual brightness/volume changes are re-adapted at the next run. Only one controller runs at a time: a run that starts while another is active exits at once, and a 10-minute run ends itself after 8 minutes.
 
+**🔄 Update a local install** (pull `main`, rebuild the controller, restart it with the new code):
+```bash
+scripts/update-local.sh        # Linux: keeps your crontab; reports if the 10-minute entry is missing
+```
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update-local.ps1   # Windows: stops the running controller, rebuilds, re-registers the tasks, starts a run
+```
+
 ## 🔥 Technical Achievements
 
 ✅ **🦀 Rewrote core engine in Rust** with SIMD vectorization for 2-4x speedup over Numba JIT
